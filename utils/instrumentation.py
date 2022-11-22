@@ -39,7 +39,7 @@ class train_logger:
             for phase in ['train', 'val', 'test']:
                 self.logs[field][phase] = {}
     
-    def compute_phase_metrics(self, phase, epoch, labels_est):
+    def compute_phase_metrics(self, phase, epoch, labels_est=None):
         
         '''
         Compute and store end-of-phase metrics. 
@@ -59,11 +59,13 @@ class train_logger:
         
         if phase == 'train':
             self.logs['metrics'][phase][epoch]['loss'] = self.running_loss / self.num_examples
-            self.logs['metrics'][phase][epoch]['est_labels_k_hat'] = float(np.mean(np.sum(labels_est, axis=1)))
+            if labels_est:
+                self.logs['metrics'][phase][epoch]['est_labels_k_hat'] = float(np.mean(np.sum(labels_est, axis=1)))
             self.logs['metrics'][phase][epoch]['avg_batch_reg'] = np.mean(self.temp_batch_reg)
         else:
             self.logs['metrics'][phase][epoch]['loss'] = -999
-            self.logs['metrics'][phase][epoch]['est_labels_k_hat'] = -999
+            if labels_est:
+                self.logs['metrics'][phase][epoch]['est_labels_k_hat'] = -999
             self.logs['metrics'][phase][epoch]['avg_batch_reg'] = -999
         self.logs['metrics'][phase][epoch]['preds_k_hat'] = np.mean(np.sum(self.temp_preds, axis=1))
    

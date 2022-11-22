@@ -65,7 +65,7 @@ def loss_iun(batch, P, Z):
     # compute loss:
     loss_mtx = torch.zeros_like(observed_labels)
     loss_mtx[observed_labels == 1] = neg_log(preds[observed_labels == 1])
-    loss_mtx[true_labels == -1] = neg_log(1.0 - preds[true_labels == -1]) # This loss gets unrealistic access to true negatives.
+    loss_mtx[true_labels == 0] = neg_log(1.0 - preds[true_labels == 0]) # This loss gets unrealistic access to true negatives.
     reg_loss = None
     return loss_mtx, reg_loss
 
