@@ -185,6 +185,51 @@ def loss_role(batch, P, Z):
     
     return loss_mtx, reg_loss
 
+
+def loss_EM(batch, P, Z):
+    # unpack:
+    preds = batch['preds']
+    observed_labels = batch['label_vec_obs']
+    true_labels = batch['label_vec_true'].to(Z['device'])
+
+    # input validation:
+    assert torch.min(observed_labels) >= 0
+
+    loss_mtx = torch.zeros_like(preds)
+
+    loss_mtx[observed_labels == 1] = neg_log(preds[observed_labels == 1])
+    loss_mtx[observed_labels == 0] = -P['alpha'] * (
+            preds[observed_labels == 0] * neg_log(preds[observed_labels == 0]) +
+            (1 - preds[observed_labels == 0]) * neg_log(1 - preds[observed_labels == 0])
+        )
+
+    return loss_mtx, None
+
+
+def loss_EM_APL(batch, P, Z):
+    # unpack:
+    preds = batch['preds']
+    observed_labels = batch['label_vec_obs']
+
+    # input validation:
+    assert torch.min(observed_labels) >= -1
+
+    loss_mtx = torch.zeros_like(preds)
+
+    loss_mtx[observed_labels == 1] = neg_log(preds[observed_labels == 1])
+    loss_mtx[observed_labels == 0] = -P['alpha'] * (
+            preds[observed_labels == 0] * neg_log(preds[observed_labels == 0]) +
+            (1 - preds[observed_labels == 0]) * neg_log(1 - preds[observed_labels == 0])
+        )
+
+    soft_label = -observed_labels[observed_labels < 0]
+    loss_mtx[observed_labels < 0] = P['beta'] * (
+            soft_label * neg_log(preds[observed_labels < 0]) +
+            (1 - soft_label) * neg_log(1 - preds[observed_labels < 0])
+        )
+    return loss_mtx, None
+
+
 loss_functions = {
     'bce': loss_bce,
     'bce_ls': loss_bce_ls,
@@ -196,6 +241,8 @@ loss_functions = {
     'wan': loss_wan,
     'epr': loss_epr,
     'role': loss_role,
+    'EM': loss_EM,
+    'EM_APL': loss_EM_APL,
 }
 
 '''

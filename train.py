@@ -1,3 +1,4 @@
+import argparse
 import os
 import copy
 import time
@@ -8,9 +9,19 @@ from utils import datasets, models
 from utils.losses import compute_batch_loss
 import datetime
 from utils.instrumentation import train_logger
+from utils.thelog import initLogger
+
+parser = argparse.ArgumentParser(description='CVPR-2021')
+parser.add_argument('-g', '--gpu', default='0', choices=['0', '1', '2', '3', '4', '5'], type=str)
+parser.add_argument('-d', '--dataset', default='pascal', choices=['pascal', 'coco', 'nuswide', 'cub'], type=str)
+parser.add_argument('-l', '--loss', default='role', choices=['bce', 'bce_ls', 'iun', 'iu', 'pr', 'an', 'an_ls', 'wan', 'epr', 'role'], type=str)
+args = parser.parse_args()
+
+# global logger
+gb_logger, save_dir = initLogger(args)
+
 
 def run_train_phase(model, P, Z, logger, epoch, phase):
-    
     '''
     Run one training phase.
     
@@ -22,13 +33,13 @@ def run_train_phase(model, P, Z, logger, epoch, phase):
     epoch: Integer index of the current epoch.
     phase: String giving the phase name
     '''
-    
+
     assert phase == 'train'
     model.train()
     for batch in Z['dataloaders'][phase]:
         # move data to GPU: 
         batch['image'] = batch['image'].to(Z['device'], non_blocking=True)
-        batch['labels_np'] = batch['label_vec_obs'].clone().numpy() # copy of labels for use in metrics
+        batch['labels_np'] = batch['label_vec_obs'].clone().numpy()  # copy of labels for use in metrics
         batch['label_vec_obs'] = batch['label_vec_obs'].to(Z['device'], non_blocking=True)
         # forward pass: 
         Z['optimizer'].zero_grad()
@@ -39,17 +50,16 @@ def run_train_phase(model, P, Z, logger, epoch, phase):
             if batch['preds'].dim() == 1:
                 batch['preds'] = torch.unsqueeze(batch['preds'], 0)
             batch['label_vec_est'] = model.g(batch['idx'])
-            batch['preds_np'] = batch['preds'].clone().detach().cpu().numpy() # copy of preds for use in metrics
+            batch['preds_np'] = batch['preds'].clone().detach().cpu().numpy()  # copy of preds for use in metrics
             batch = compute_batch_loss(batch, P, Z)
         # backward pass:
         batch['loss_tensor'].backward()
         Z['optimizer'].step()
         # save current batch data:
         logger.update_phase_data(batch)
-    
+
 
 def run_eval_phase(model, P, Z, logger, epoch, phase):
-    
     '''
     Run one evaluation phase.
     
@@ -61,13 +71,13 @@ def run_eval_phase(model, P, Z, logger, epoch, phase):
     epoch: Integer index of the current epoch.
     phase: String giving the phase name
     '''
-    
+
     assert phase in ['val', 'test']
     model.eval()
     for batch in Z['dataloaders'][phase]:
         # move data to GPU: 
         batch['image'] = batch['image'].to(Z['device'], non_blocking=True)
-        batch['labels_np'] = batch['label_vec_obs'].clone().numpy() # copy of labels for use in metrics
+        batch['labels_np'] = batch['label_vec_obs'].clone().numpy()  # copy of labels for use in metrics
         batch['label_vec_obs'] = batch['label_vec_obs'].to(Z['device'], non_blocking=True)
         # forward pass: 
         with torch.set_grad_enabled(False):
@@ -75,14 +85,14 @@ def run_eval_phase(model, P, Z, logger, epoch, phase):
             batch['preds'] = torch.sigmoid(batch['logits'])
             if batch['preds'].dim() == 1:
                 batch['preds'] = torch.unsqueeze(batch['preds'], 0)
-            batch['preds_np'] = batch['preds'].clone().detach().cpu().numpy() # copy of preds for use in metrics
+            batch['preds_np'] = batch['preds'].clone().detach().cpu().numpy()  # copy of preds for use in metrics
             batch['loss_np'] = -1
             batch['reg_loss_np'] = -1
         # save current batch data:
         logger.update_phase_data(batch)
 
+
 def train(model, P, Z):
-    
     '''
     Train the model.
     
@@ -90,48 +100,50 @@ def train(model, P, Z):
     P: Dictionary of parameters, which completely specify the training procedure.
     Z: Dictionary of temporary objects used during training.
     '''
-    
+
     best_weights_f = copy.deepcopy(model.f.state_dict())
     best_weights_g = copy.deepcopy(model.g.state_dict())
-    logger = train_logger(P) # initialize logger
-    
+    logger = train_logger(P)  # initialize logger
+
     for epoch in range(P['num_epochs']):
-        print('Epoch {}/{}'.format(epoch, P['num_epochs']-1))
-        
+        gb_logger.info('Epoch {}/{}'.format(epoch, P['num_epochs'] - 1))
+
         for phase in ['train', 'val', 'test']:
             # reset phase metrics:
             logger.reset_phase_data()
-            
+
             # run one phase:
             t_init = time.time()
             if phase == 'train':
                 run_train_phase(model, P, Z, logger, epoch, phase)
             else:
                 run_eval_phase(model, P, Z, logger, epoch, phase)
-                
+
             # save end-of-phase metrics:
             logger.compute_phase_metrics(phase, epoch, model.g.get_estimated_labels())
-            
+
             # print epoch status:
-            logger.report(t_init, time.time(), phase, epoch)
-            
+            logger.report(t_init, time.time(), phase, epoch, gb_logger)
+
             # update best epoch, if applicable:
             new_best = logger.update_best_results(phase, epoch, P['val_set_variant'])
             if new_best:
-                print('*** new best weights ***')
+                gb_logger.info('*** new best weights ***')
                 best_weights_f = copy.deepcopy(model.f.state_dict())
                 best_weights_g = copy.deepcopy(model.g.state_dict())
-    
-    print('')
-    print('*** TRAINING COMPLETE ***')
-    print('Best epoch: {}'.format(logger.best_epoch))
-    print('Best epoch validation score: {:.2f}'.format(logger.get_stop_metric('val', logger.best_epoch, P['val_set_variant'])))
-    print('Best epoch test score:       {:.2f}'.format(logger.get_stop_metric('test', logger.best_epoch, 'clean')))
-    
+
+    gb_logger.info('')
+    gb_logger.info('*** TRAINING COMPLETE ***')
+    gb_logger.info('Best epoch: {}'.format(logger.best_epoch))
+    gb_logger.info('Best epoch validation score: {:.2f}'.format(
+        logger.get_stop_metric('val', logger.best_epoch, P['val_set_variant'])))
+    gb_logger.info(
+        'Best epoch test score:       {:.2f}'.format(logger.get_stop_metric('test', logger.best_epoch, 'clean')))
+
     return P, model, logger, best_weights_f, best_weights_g
 
+
 def initialize_training_run(P, feature_extractor, linear_classifier, estimated_labels):
-    
     '''
     Set up for model training.
     
@@ -141,55 +153,73 @@ def initialize_training_run(P, feature_extractor, linear_classifier, estimated_l
     linear_classifier: Linear classifier model to start from.
     estimated_labels: NumPy array containing estimated training set labels to start from (for ROLE).
     '''
-    
-    os.makedirs(P['save_path'], exist_ok=True)
+
+    # os.makedirs(P['save_path'], exist_ok=True)
     np.random.seed(P['seed'])
-    
+
     Z = {}
-    
+
     # accelerator:
-    Z['device'] = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    
+    Z['device'] = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
     # data:
     Z['datasets'] = datasets.get_data(P)
-    
+
     # observed label matrix:
+    label_matrix = Z['datasets']['train'].label_matrix
+    num_examples = int(np.shape(label_matrix)[0])
+    mtx = np.array(label_matrix).astype(np.int8)
+    total_pos = np.sum(mtx == 1)
+    total_neg = np.sum(mtx == 0)
+    gb_logger.info('training samples: {} total'.format(num_examples))
+    gb_logger.info(
+        'true positives: {} total, {:.2f} per example on average.'.format(total_pos, total_pos / num_examples))
+    gb_logger.info(
+        'true negatives: {} total, {:.2f} per example on average.'.format(total_neg, total_neg / num_examples))
     observed_label_matrix = Z['datasets']['train'].label_matrix_obs
-    
+    num_examples = int(np.shape(observed_label_matrix)[0])
+    obs_mtx = np.array(observed_label_matrix).astype(np.int8)
+    obs_total_pos = np.sum(obs_mtx == 1)
+    obs_total_neg = np.sum(obs_mtx == 0)
+    gb_logger.info('observed positives: {} total, {:.2f} per example on average.'.format(obs_total_pos,
+                                                                                         obs_total_pos / num_examples))
+    gb_logger.info('observed negatives: {} total, {:.2f} per example on average.'.format(obs_total_neg,
+                                                                                         obs_total_neg / num_examples))
+
     # save dataset-specific parameters:
     P['num_classes'] = Z['datasets']['train'].num_classes
-    
+
     # dataloaders:
     Z['dataloaders'] = {}
     for phase in ['train', 'val', 'test']:
         Z['dataloaders'][phase] = torch.utils.data.DataLoader(
             Z['datasets'][phase],
-            batch_size = P['bsize'],
-            shuffle = phase == 'train',
-            sampler = None,
-            num_workers = P['num_workers'],
-            drop_last = True
+            batch_size=P['bsize'],
+            shuffle=phase == 'train',
+            sampler=None,
+            num_workers=P['num_workers'],
+            drop_last=True
         )
-        
+
     # model:
     model = models.MultilabelModel(P, feature_extractor, linear_classifier, observed_label_matrix, estimated_labels)
-    
+
     # optimization objects:
     f_params = [param for param in list(model.f.parameters()) if param.requires_grad]
     g_params = [param for param in list(model.g.parameters()) if param.requires_grad]
     opt_params = [
-        {'params': f_params, 'lr': P['lr']}, 
+        {'params': f_params, 'lr': P['lr']},
         {'params': g_params, 'lr': P['lr_mult'] * P['lr']}
-        ]
+    ]
     Z['optimizer'] = torch.optim.Adam(
         opt_params,
-        lr = P['lr']
+        lr=P['lr']
     )
-    
+
     return P, Z, model
 
+
 def execute_training_run(P, feature_extractor, linear_classifier, estimated_labels=None):
-    
     '''
     Initialize, run the training process, and save the results.
     
@@ -199,34 +229,35 @@ def execute_training_run(P, feature_extractor, linear_classifier, estimated_labe
     linear_classifier: Linear classifier model to start from.
     estimated_labels: NumPy array containing estimated training set labels to start from (for ROLE).
     '''
-    
+
     P, Z, model = initialize_training_run(P, feature_extractor, linear_classifier, estimated_labels)
     model.to(Z['device'])
-    
+
     P, model, logger, best_weights_f, best_weights_g = train(model, P, Z)
-    
-    print('\nSaving best weights for f to {}/best_model_state_f.pt'.format(P['save_path']))
-    torch.save(best_weights_f, os.path.join(P['save_path'], 'best_model_state_f.pt'))
-    print('\nSaving best weights for g to {}/best_model_state_g.pt'.format(P['save_path']))
-    torch.save(best_weights_g, os.path.join(P['save_path'], 'best_model_state_g.pt'))
+
+    # gb_logger.info('\nSaving best weights for f to {}/best_model_state_f.pt'.format(P['save_path']))
+    # torch.save(best_weights_f, os.path.join(P['save_path'], 'best_model_state_f.pt'))
+    # gb_logger.info('\nSaving best weights for g to {}/best_model_state_g.pt'.format(P['save_path']))
+    # torch.save(best_weights_g, os.path.join(P['save_path'], 'best_model_state_g.pt'))
 
     final_logs = logger.get_logs()
-    print('\nSaving session data to {}/logs.json'.format(P['save_path']))
-    with open(os.path.join(P['save_path'], 'logs.json'), 'w') as f:
-        json.dump(final_logs, f)
-    
-    print('\nSaving session data to {}/params.json'.format(P['save_path']))
-    with open(os.path.join(P['save_path'], 'params.json'), 'w') as f:
-        json.dump(P, f)
-                
-    print('\nReverting model to best weights.')
+    # gb_logger.info('\nSaving session data to {}/logs.json'.format(P['save_path']))
+    # with open(os.path.join(P['save_path'], 'logs.json'), 'w') as f:
+    #     json.dump(final_logs, f)
+    #
+    # gb_logger.info('\nSaving session data to {}/params.json'.format(P['save_path']))
+    # with open(os.path.join(P['save_path'], 'params.json'), 'w') as f:
+    #     json.dump(P, f)
+
+    gb_logger.info('\nReverting model to best weights.')
     model.f.load_state_dict(best_weights_f)
     model.g.load_state_dict(best_weights_g)
-    
+
     return model.f.feature_extractor, model.f.linear_classifier, model.g.get_estimated_labels(), final_logs
 
+
 if __name__ == '__main__':
-    
+
     lookup = {
         'feat_dim': {
             'resnet50': 2048
@@ -237,7 +268,7 @@ if __name__ == '__main__':
             'nuswide': 1.9,
             'cub': 31.4
         },
-        'linear_init_params': { # best learning rate and batch size for linear_fixed_features phase of linear_init
+        'linear_init_params': {  # best learning rate and batch size for linear_fixed_features phase of linear_init
             'an_ls': {
                 'pascal': {'linear_init_lr': 1e-4, 'linear_init_bsize': 8},
                 'coco': {'linear_init_lr': 1e-4, 'linear_init_bsize': 8},
@@ -254,40 +285,57 @@ if __name__ == '__main__':
     }
 
     P = {}
-    
+
     # Top-level parameters:
-    P['dataset'] = 'pascal' # pascal, coco, nuswide, cub
-    P['loss'] = 'role' # bce, bce_ls, iun, iu, pr, an, an_ls, wan, epr, role
-    P['train_mode'] = 'end_to_end' # linear_fixed_features, end_to_end, linear_init
-    P['val_set_variant'] = 'clean' # clean, observed
-    
+    P['GPU'] = args.gpu
+    os.environ["CUDA_VISIBLE_DEVICES"] = P['GPU']
+    P['dataset'] = args.dataset  # pascal, coco, nuswide, cub
+    P['loss'] = args.loss  # bce, bce_ls, iun, iu, pr, an, an_ls, wan, epr, role
+    P['train_mode'] = 'end_to_end'  # linear_fixed_features, end_to_end, linear_init
+    P['val_set_variant'] = 'clean'  # clean, observed
+
     # Paths and filenames:
-    P['experiment_name'] = 'multi_label_experiment'
-    P['load_path'] = './data'
-    P['save_path'] = './results'
+    # P['experiment_name'] = 'multi_label_experiment'
+    # P['load_path'] = './data'
+    # P['save_path'] = './results'
 
     # Optimization parameters:
     if P['train_mode'] == 'linear_init':
         P['linear_init_lr'] = lookup['linear_init_params'][P['loss']][P['dataset']]['linear_init_lr']
         P['linear_init_bsize'] = lookup['linear_init_params'][P['loss']][P['dataset']]['linear_init_bsize']
-    P['lr_mult'] = 10.0 # learning rate multiplier for the parameters of g
-    P['stop_metric'] = 'map' # metric used to select the best epoch
-    
+    P['lr_mult'] = 10.0  # learning rate multiplier for the parameters of g
+    P['stop_metric'] = 'map'  # metric used to select the best epoch
+
     # Loss-specific parameters:
-    P['ls_coef'] = 0.1 # label smoothing coefficient
+    P['ls_coef'] = 0.1  # label smoothing coefficient
 
     # Additional parameters:
-    P['seed'] = 1200 # overall numpy seed
-    P['use_pretrained'] = True # True, False
+    P['seed'] = 1200  # overall numpy seed
+    P['use_pretrained'] = True  # True, False
     P['num_workers'] = 4
 
     # Dataset parameters:
-    P['split_seed'] = 1200 # seed for train / val splitting
-    P['val_frac'] = 0.2 # fraction of train set to split off for val
-    P['ss_seed'] = 999 # seed for subsampling
-    P['ss_frac_train'] = 1.0 # fraction of training set to subsample
-    P['ss_frac_val'] = 1.0 # fraction of val set to subsample
-    
+    P['split_seed'] = 1200  # seed for train / val splitting
+    P['val_frac'] = 0.2  # fraction of train set to split off for val
+    P['ss_seed'] = 999  # seed for subsampling
+    P['ss_frac_train'] = 1.0  # fraction of training set to subsample
+    P['ss_frac_val'] = 1.0  # fraction of val set to subsample
+
+    # Optimization parameters:
+    if P['dataset'] == 'pascal':
+        P['bsize'] = 8
+        P['lr'] = 1e-5
+    elif P['dataset'] == 'cub':
+        P['bsize'] = 8
+        P['lr'] = 1e-4
+    elif P['dataset'] == 'nuswide':
+        P['bsize'] = 16
+        P['lr'] = 1e-5
+    elif P['dataset'] == 'coco':
+        P['bsize'] = 16
+        P['lr'] = 1e-5
+
+
     # Dependent parameters:
     if P['loss'] in ['bce', 'bce_ls']:
         P['train_set_variant'] = 'clean'
@@ -315,56 +363,48 @@ if __name__ == '__main__':
     P['expected_num_pos'] = lookup['expected_num_pos'][P['dataset']]
     P['train_feats_file'] = './data/{}/train_features_imagenet_{}.npy'.format(P['dataset'], P['feature_extractor_arch'])
     P['val_feats_file'] = './data/{}/val_features_imagenet_{}.npy'.format(P['dataset'], P['feature_extractor_arch'])
-    
+
     # run training process:
     best_params = None
     best_lr = None
     best_bsize = None
     best_val_score = - np.Inf
     best_test_score = None
-    now_str = datetime.datetime.now().strftime("%Y_%m_%d_%X").replace(':','-')
+    now_str = datetime.datetime.now().strftime("%Y_%m_%d_%X").replace(':', '-')
     if P['train_mode'] == 'linear_init':
-        print('training linear classifier with fixed hyperparameters:')
-        print('- linear_init_lr: {}'.format(P['linear_init_lr']))
-        print('- linear_init_bsize: {}'.format(P['linear_init_bsize']))
+        gb_logger.info('training linear classifier with fixed hyperparameters:')
+        gb_logger.info('- linear_init_lr: {}'.format(P['linear_init_lr']))
+        gb_logger.info('- linear_init_bsize: {}'.format(P['linear_init_bsize']))
         P['bsize'] = P['linear_init_bsize']
         P['lr'] = P['linear_init_lr']
-        P['save_path'] = './results/' + P['experiment_name'] + '_' + now_str + '_' + P['dataset']
-        os.makedirs(P['save_path'], exist_ok=False)
-        P_temp = copy.deepcopy(P) # re-set hyperparameter dict
-        (feature_extractor_init, linear_classifier_init, estimated_labels_init, logs) = execute_training_run(P_temp, feature_extractor=None, linear_classifier=None)
-        print('fine-tuning from trained linear classifier')
-    for bsize in [8, 16]:
-        for lr in [1e-2, 1e-3, 1e-4, 1e-5]:
-            now_str = datetime.datetime.now().strftime("%Y_%m_%d_%X").replace(':','-')
-            P['bsize'] = bsize
-            P['lr'] = lr
-            P['save_path'] = './results/' + P['experiment_name'] + '_' + now_str + '_' + P['dataset']
-            P_temp = copy.deepcopy(P) # re-set hyperparameter dict
-            if P['train_mode'] == 'linear_init':
-                P_temp['save_path'] = P['save_path'] + '_fine_tuned_from_linear'
-                os.makedirs(P_temp['save_path'], exist_ok=False)
-                P_temp['train_mode'] = 'end_to_end'
-                P_temp['num_epochs'] = 10
-                P_temp['freeze_feature_extractor'] = False
-                P_temp['use_feats'] = False
-                P_temp['arch'] = 'resnet50'
-                (feature_extractor, linear_classifier, estimated_labels, logs) = execute_training_run(P_temp, feature_extractor=feature_extractor_init, linear_classifier=linear_classifier_init, estimated_labels=estimated_labels_init)
-            else:
-                os.makedirs(P['save_path'], exist_ok=False)
-                (feature_extractor, linear_classifier, estimated_labels, logs) = execute_training_run(P_temp, feature_extractor=None, linear_classifier=None)
-            # keep track of the best run: 
-            best_epoch = np.argmax([logs['metrics']['val'][epoch][P_temp['stop_metric'] + '_' + P_temp['val_set_variant']] for epoch in range(P_temp['num_epochs'])])
-            val_score = logs['metrics']['val'][best_epoch][P_temp['stop_metric'] + '_' + P_temp['val_set_variant']]
-            test_score = logs['metrics']['test'][best_epoch][P_temp['stop_metric'] + '_clean']
-            if val_score > best_val_score:
-                best_val_score = val_score
-                best_test_score = test_score
-                best_params = copy.deepcopy(P_temp)
-    # report the best run:
-    print('best run: {}'.format(best_params['save_path']))
-    print('- learning rate: {}'.format(best_params['lr']))
-    print('- batch size:    {}'.format(best_params['bsize']))
-    print('- val score:     {}'.format(best_val_score))
-    print('- test score:    {}'.format(best_test_score))
-    
+        # P['save_path'] = './results/' + P['experiment_name'] + '_' + now_str + '_' + P['dataset']
+        # os.makedirs(P['save_path'], exist_ok=False)
+        P_temp = copy.deepcopy(P)  # re-set hyperparameter dict
+        (feature_extractor_init, linear_classifier_init, estimated_labels_init, logs) = execute_training_run(P_temp,
+                                                                                                             feature_extractor=None,
+                                                                                                             linear_classifier=None)
+        gb_logger.info('fine-tuning from trained linear classifier')
+    # bsize = 0
+    # lr = 0
+    now_str = datetime.datetime.now().strftime("%Y_%m_%d_%X").replace(':', '-')
+    # P['bsize'] = bsize
+    # P['lr'] = lr
+    # P['save_path'] = './results/' + P['experiment_name'] + '_' + now_str + '_' + P['dataset']
+    P_temp = copy.deepcopy(P)  # re-set hyperparameter dict
+    if P['train_mode'] == 'linear_init':
+        # P_temp['save_path'] = P['save_path'] + '_fine_tuned_from_linear'
+        # os.makedirs(P_temp['save_path'], exist_ok=False)
+        P_temp['train_mode'] = 'end_to_end'
+        P_temp['num_epochs'] = 1
+        P_temp['freeze_feature_extractor'] = False
+        P_temp['use_feats'] = False
+        P_temp['arch'] = 'resnet50'
+        (feature_extractor, linear_classifier, estimated_labels, logs) = execute_training_run(P_temp,
+                                                                                              feature_extractor=feature_extractor_init,
+                                                                                              linear_classifier=linear_classifier_init,
+                                                                                              estimated_labels=estimated_labels_init)
+    else:
+        # os.makedirs(P['save_path'], exist_ok=False)
+        (feature_extractor, linear_classifier, estimated_labels, logs) = execute_training_run(P_temp,
+                                                                                              feature_extractor=None,
+                                                                                              linear_classifier=None)

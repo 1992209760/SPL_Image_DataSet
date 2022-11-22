@@ -5,9 +5,18 @@ import numpy as np
 import torch
 from utils import datasets, models
 import argparse
-from tqdm import tqdm
 from utils.losses import compute_batch_loss
 from utils.instrumentation import train_logger
+from utils.thelog import initLogger
+
+parser = argparse.ArgumentParser(description='AckTheUnknown-ECCV2022')
+parser.add_argument('-g', '--gpu', default='0', choices=['0', '1', '2', '3'], type=str)
+parser.add_argument('-d', '--dataset', default='pascal', choices=['pascal', 'coco', 'nuswide', 'cub'], type=str)
+parser.add_argument('-l', '--loss', default='EM_APL', choices=['bce', 'iun', 'an', 'EM', 'EM_APL'], type=str)
+args = parser.parse_args()
+
+# global logger
+gb_logger, save_dir = initLogger(args)
 
 
 def run_train_phase(model, P, Z, logger, epoch, phase):
@@ -27,8 +36,7 @@ def run_train_phase(model, P, Z, logger, epoch, phase):
     assert phase == 'train'
     model.train()
 
-    desc = '[{}/{}]{}'.format(epoch, P['num_epochs'], phase.rjust(8, ' '))
-    for batch in tqdm(Z['dataloaders'][phase], desc=desc):
+    for batch in Z['dataloaders'][phase]:
         # move data to GPU:
         batch['image'] = batch['image'].to(Z['device'], non_blocking=True)
         batch['labels_np'] = batch['label_vec_obs'].clone().numpy()  # copy of labels for use in metrics
@@ -65,8 +73,7 @@ def run_eval_phase(model, P, Z, logger, epoch, phase):
 
     assert phase in ['val', 'test']
     model.eval()
-    desc = '[{}/{}]{}'.format(epoch, P['num_epochs'], phase.rjust(8, ' '))
-    for batch in tqdm(Z['dataloaders'][phase], desc=desc):
+    for batch in Z['dataloaders'][phase]:
         # move data to GPU:
         batch['image'] = batch['image'].to(Z['device'], non_blocking=True)
         batch['labels_np'] = batch['label_vec_obs'].clone().numpy()  # copy of labels for use in metrics
@@ -99,7 +106,7 @@ def train(model, P, Z):
     if_early_stop = False
 
     for epoch_idx in range(0, P['num_epochs']):
-        print('start epoch [{}/{}] ...'.format(epoch_idx + 1, P['num_epochs']))
+        gb_logger.info('start epoch [{}/{}] ...'.format(epoch_idx + 1, P['num_epochs']))
         P['epoch'] = epoch_idx + 1
         for phase in ['train', 'val', 'test']:
             # reset phase metrics:
@@ -118,26 +125,26 @@ def train(model, P, Z):
             logger.compute_phase_metrics(phase, P['epoch'])
 
             # print epoch status:
-            logger.report(t_init, time.time(), phase, P['epoch'])
+            logger.report(t_init, time.time(), phase, P['epoch'], gb_logger)
 
             # update best epoch, if applicable:
             new_best = logger.update_best_results(phase, P['epoch'], P['val_set_variant'])
             if new_best:
-                print('*** new best weights ***')
+                gb_logger.info('*** new best weights ***')
                 best_weights_f = copy.deepcopy(model.f.state_dict())
             elif (not new_best) and (phase == 'val'):
-                print('*** early stop ***')
+                gb_logger.info('*** early stop ***')
                 if_early_stop = True
                 break
 
         if if_early_stop:
             break
 
-    print('')
-    print('*** TRAINING COMPLETE ***')
-    print('Best epoch: {}'.format(logger.best_epoch))
-    print('Best epoch validation score: {:.2f}'.format(logger.get_stop_metric('val', logger.best_epoch, P['val_set_variant'])))
-    print('Best epoch test score:       {:.2f}'.format(logger.get_stop_metric('test', logger.best_epoch, 'clean')))
+    gb_logger.info('')
+    gb_logger.info('*** TRAINING COMPLETE ***')
+    gb_logger.info('Best epoch: {}'.format(logger.best_epoch))
+    gb_logger.info('Best epoch validation score: {:.2f}'.format(logger.get_stop_metric('val', logger.best_epoch, P['val_set_variant'])))
+    gb_logger.info('Best epoch test score:       {:.2f}'.format(logger.get_stop_metric('test', logger.best_epoch, 'clean')))
 
     return P, model, logger, best_weights_f
 
@@ -170,16 +177,16 @@ def initialize_training_run(P, feature_extractor, linear_classifier):
     mtx = np.array(label_matrix).astype(np.int8)
     total_pos = np.sum(mtx == 1)
     total_neg = np.sum(mtx == 0)
-    print('training samples: {} total'.format(num_examples))
-    print('true positives: {} total, {:.2f} per example on average.'.format(total_pos, total_pos / num_examples))
-    print('true negatives: {} total, {:.2f} per example on average.'.format(total_neg, total_neg / num_examples))
+    gb_logger.info('training samples: {} total'.format(num_examples))
+    gb_logger.info('true positives: {} total, {:.2f} per example on average.'.format(total_pos, total_pos / num_examples))
+    gb_logger.info('true negatives: {} total, {:.2f} per example on average.'.format(total_neg, total_neg / num_examples))
     observed_label_matrix = Z['datasets']['train'].label_matrix_obs
     num_examples = int(np.shape(observed_label_matrix)[0])
     obs_mtx = np.array(observed_label_matrix).astype(np.int8)
     obs_total_pos = np.sum(obs_mtx == 1)
-    obs_total_neg = np.sum(obs_mtx == -1)
-    print('observed positives: {} total, {:.2f} per example on average.'.format(obs_total_pos, obs_total_pos / num_examples))
-    print('observed negatives: {} total, {:.2f} per example on average.'.format(obs_total_neg, obs_total_neg / num_examples))
+    obs_total_neg = np.sum(obs_mtx == 0)
+    gb_logger.info('observed positives: {} total, {:.2f} per example on average.'.format(obs_total_pos, obs_total_pos / num_examples))
+    gb_logger.info('observed negatives: {} total, {:.2f} per example on average.'.format(obs_total_neg, obs_total_neg / num_examples))
 
     # save dataset-specific parameters:
     P['num_classes'] = Z['datasets']['train'].num_classes
@@ -202,7 +209,7 @@ def initialize_training_run(P, feature_extractor, linear_classifier):
         P['unlabel_num'].append(np.sum(observed_label_matrix[:, i] == 0))
 
     # model:
-    model = models.MultilabelModel(P, feature_extractor, linear_classifier)
+    model = models.MultilabelModel_EM(P, feature_extractor, linear_classifier)
 
     # optimization objects:
     f_params = [param for param in list(model.f.parameters()) if param.requires_grad]
@@ -247,8 +254,7 @@ def aysmmetric_pseudo_labeling(model, P, Z, logger, epoch, phase):
     total_idx = None
     P['steps_per_epoch'] = len(Z['dataloaders'][phase])
 
-    desc = '[{}/{}]{}'.format(epoch, P['num_epochs'], 'PL'.rjust(8, ' '))
-    for i, batch in enumerate(tqdm(Z['dataloaders'][phase], desc=desc)):
+    for i, batch in enumerate(Z['dataloaders'][phase]):
 
         P['batch'] = i
 
@@ -295,16 +301,10 @@ def aysmmetric_pseudo_labeling(model, P, Z, logger, epoch, phase):
 
 if __name__ == '__main__':
 
-    parser = argparse.ArgumentParser(description='AckTheUnknown-ECCV2022')
-    parser.add_argument('-g', '--gpu', default='0', choices=['0', '1', '2', '3'], type=str)
-    parser.add_argument('-d', '--dataset', default='pascal', choices=['pascal', 'coco', 'nuswide', 'cub'], type=str)
-    parser.add_argument('-l', '--loss', default='EM_APL', choices=['bce', 'iun', 'an', 'EM', 'EM_APL'], type=str)
-    parser.add_argument('-s', '--pytorch_seed', default=0, type=int)  # try 0, 1, 8
-    args = parser.parse_args()
-
     P = {}
 
     # System parameters:
+    args.pytorch_seed = int(time.time()) % (2 ** 16)
     P['pytorch_seed'] = args.pytorch_seed
     torch.manual_seed(P['pytorch_seed'])
     torch.cuda.manual_seed(P['pytorch_seed'])
@@ -374,5 +374,5 @@ if __name__ == '__main__':
     P['feat_dim'] = 2048
 
     # run training process:
-    print('[{} + {}] start exp ...'.format(P['dataset'], P['loss']))
+    gb_logger.info('[{} + {}] start exp ...'.format(P['dataset'], P['loss']))
     (feature_extractor, linear_classifier, logs) = execute_training_run(P, feature_extractor=None, linear_classifier=None)

@@ -150,3 +150,13 @@ class MultilabelModel(torch.nn.Module):
         f_logits = self.f(batch['image'])
         g_preds = self.g(batch['idx']) # oops, we had a sigmoid here in addition to 
         return (f_logits, g_preds)
+
+
+class MultilabelModel_EM(torch.nn.Module):
+    def __init__(self, P, feature_extractor, linear_classifier):
+        super(MultilabelModel_EM, self).__init__()
+        self.f = ImageClassifier(P, feature_extractor, linear_classifier)
+
+    def forward(self, batch):
+        f_logits = self.f(batch['image'])
+        return f_logits

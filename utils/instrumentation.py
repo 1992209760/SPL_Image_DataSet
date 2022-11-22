@@ -145,7 +145,7 @@ class train_logger:
         
         return copy.deepcopy(self.logs)
     
-    def report(self, t_i, t_f, phase, epoch):
+    def report(self, t_i, t_f, phase, epoch, gb_logger=None):
         report = '[{}] time: {:.2f} min, loss: {:.3f}, {}: {:.2f}, {}: {:.2f}'.format(
             phase,
             (t_f - t_i) / 60.0,
@@ -155,7 +155,10 @@ class train_logger:
             self.params['stop_metric'] + '_observed',
             self.get_stop_metric(phase, epoch, 'observed'),
             )
-        print(report)
+        if gb_logger is None:
+            print(report)
+        else:
+            gb_logger.info(report)
         
 
 def compute_metrics(y_pred, y_true):
