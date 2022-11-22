@@ -4,11 +4,10 @@ import time
 import json
 import numpy as np
 import torch
-import datasets
-import models
-from losses import compute_batch_loss
+from utils import datasets, models
+from utils.losses import compute_batch_loss
 import datetime
-from instrumentation import train_logger
+from utils.instrumentation import train_logger
 
 def run_train_phase(model, P, Z, logger, epoch, phase):
     
@@ -257,9 +256,9 @@ if __name__ == '__main__':
     P = {}
     
     # Top-level parameters:
-    P['dataset'] = 'nuswide' # pascal, coco, nuswide, cub
+    P['dataset'] = 'pascal' # pascal, coco, nuswide, cub
     P['loss'] = 'role' # bce, bce_ls, iun, iu, pr, an, an_ls, wan, epr, role
-    P['train_mode'] = 'linear_init' # linear_fixed_features, end_to_end, linear_init
+    P['train_mode'] = 'end_to_end' # linear_fixed_features, end_to_end, linear_init
     P['val_set_variant'] = 'clean' # clean, observed
     
     # Paths and filenames:

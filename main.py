@@ -1,16 +1,13 @@
 import os
 import copy
 import time
-import json
 import numpy as np
 import torch
-import datasets
-import models
+from utils import datasets, models
 import argparse
 from tqdm import tqdm
-from losses import compute_batch_loss
-import datetime
-from instrumentation import train_logger
+from utils.losses import compute_batch_loss
+from utils.instrumentation import train_logger
 
 
 def run_train_phase(model, P, Z, logger, epoch, phase):
@@ -308,13 +305,13 @@ if __name__ == '__main__':
     P = {}
 
     # System parameters:
-    os.environ["CUDA_VISIBLE_DEVICES"] = P['GPU']
     P['pytorch_seed'] = args.pytorch_seed
     torch.manual_seed(P['pytorch_seed'])
     torch.cuda.manual_seed(P['pytorch_seed'])
 
     # Top-level parameters:
     P['GPU'] = args.gpu
+    os.environ["CUDA_VISIBLE_DEVICES"] = P['GPU']
     P['dataset'] = args.dataset
     P['loss'] = args.loss
     P['val_set_variant'] = 'clean'  # clean, observed

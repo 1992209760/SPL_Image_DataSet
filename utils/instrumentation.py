@@ -1,6 +1,6 @@
 import numpy as np
 import copy
-import metrics
+from . import metrics
 
 class train_logger:
     
@@ -59,12 +59,12 @@ class train_logger:
         
         if phase == 'train':
             self.logs['metrics'][phase][epoch]['loss'] = self.running_loss / self.num_examples
-            if labels_est:
+            if not (labels_est is None):
                 self.logs['metrics'][phase][epoch]['est_labels_k_hat'] = float(np.mean(np.sum(labels_est, axis=1)))
             self.logs['metrics'][phase][epoch]['avg_batch_reg'] = np.mean(self.temp_batch_reg)
         else:
             self.logs['metrics'][phase][epoch]['loss'] = -999
-            if labels_est:
+            if not (labels_est is None):
                 self.logs['metrics'][phase][epoch]['est_labels_k_hat'] = -999
             self.logs['metrics'][phase][epoch]['avg_batch_reg'] = -999
         self.logs['metrics'][phase][epoch]['preds_k_hat'] = np.mean(np.sum(self.temp_preds, axis=1))
