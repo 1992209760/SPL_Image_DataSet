@@ -12,7 +12,7 @@ from utils.instrumentation import train_logger
 from utils.thelog import initLogger
 
 parser = argparse.ArgumentParser(description='CVPR-2021')
-parser.add_argument('-g', '--gpu', default='0', choices=['0', '1', '2', '3', '4', '5'], type=str)
+parser.add_argument('-g', '--gpu', default=0, type=int)
 parser.add_argument('-d', '--dataset', default='pascal', choices=['pascal', 'coco', 'nuswide', 'cub'], type=str)
 parser.add_argument('-l', '--loss', default='role', choices=['bce', 'bce_ls', 'iun', 'iu', 'pr', 'an', 'an_ls', 'wan', 'epr', 'role'], type=str)
 args = parser.parse_args()
@@ -249,7 +249,7 @@ def execute_training_run(P, feature_extractor, linear_classifier, estimated_labe
     # with open(os.path.join(P['save_path'], 'params.json'), 'w') as f:
     #     json.dump(P, f)
 
-    gb_logger.info('\nReverting model to best weights.')
+    # gb_logger.info('\nReverting model to best weights.')
     model.f.load_state_dict(best_weights_f)
     model.g.load_state_dict(best_weights_g)
 
@@ -287,7 +287,7 @@ if __name__ == '__main__':
     P = {}
 
     # Top-level parameters:
-    P['GPU'] = args.gpu
+    P['GPU'] = str(args.gpu)
     os.environ["CUDA_VISIBLE_DEVICES"] = P['GPU']
     P['dataset'] = args.dataset  # pascal, coco, nuswide, cub
     P['loss'] = args.loss  # bce, bce_ls, iun, iu, pr, an, an_ls, wan, epr, role
@@ -395,7 +395,7 @@ if __name__ == '__main__':
         # P_temp['save_path'] = P['save_path'] + '_fine_tuned_from_linear'
         # os.makedirs(P_temp['save_path'], exist_ok=False)
         P_temp['train_mode'] = 'end_to_end'
-        P_temp['num_epochs'] = 1
+        P_temp['num_epochs'] = 10
         P_temp['freeze_feature_extractor'] = False
         P_temp['use_feats'] = False
         P_temp['arch'] = 'resnet50'

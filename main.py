@@ -10,7 +10,7 @@ from utils.instrumentation import train_logger
 from utils.thelog import initLogger
 
 parser = argparse.ArgumentParser(description='AckTheUnknown-ECCV2022')
-parser.add_argument('-g', '--gpu', default='0', choices=['0', '1', '2', '3'], type=str)
+parser.add_argument('-g', '--gpu', default=0, type=int)
 parser.add_argument('-d', '--dataset', default='pascal', choices=['pascal', 'coco', 'nuswide', 'cub'], type=str)
 parser.add_argument('-l', '--loss', default='EM_APL', choices=['bce', 'iun', 'an', 'EM', 'EM_APL'], type=str)
 args = parser.parse_args()
@@ -310,7 +310,7 @@ if __name__ == '__main__':
     torch.cuda.manual_seed(P['pytorch_seed'])
 
     # Top-level parameters:
-    P['GPU'] = args.gpu
+    P['GPU'] = str(args.gpu)
     os.environ["CUDA_VISIBLE_DEVICES"] = P['GPU']
     P['dataset'] = args.dataset
     P['loss'] = args.loss
