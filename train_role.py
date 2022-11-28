@@ -287,6 +287,7 @@ if __name__ == '__main__':
     P = {}
 
     # Top-level parameters:
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     P['GPU'] = str(args.gpu)
     os.environ["CUDA_VISIBLE_DEVICES"] = P['GPU']
     P['dataset'] = args.dataset  # pascal, coco, nuswide, cub
