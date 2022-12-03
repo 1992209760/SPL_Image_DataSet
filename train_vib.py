@@ -1,8 +1,11 @@
 import argparse
 import os
 import copy
+import sys
 import time
 import json
+
+import numpy
 import numpy as np
 import torch
 from utils import datasets, models
@@ -14,10 +17,16 @@ from utils.thelog import initLogger
 parser = argparse.ArgumentParser(description='CVPR-2021')
 parser.add_argument('-g', '--gpu', default=0, type=int)
 parser.add_argument('-d', '--dataset', default='pascal', choices=['pascal', 'coco', 'nuswide', 'cub'], type=str)
-parser.add_argument('-l', '--loss', default='VIB', choices=['bce', 'bce_ls', 'iun', 'iu', 'pr', 'an', 'an_ls', 'wan', 'epr', 'role', 'VIB'], type=str)
+parser.add_argument('-l', '--loss', default='VIB',
+                    choices=['bce', 'bce_ls', 'iun', 'iu', 'pr', 'an', 'an_ls', 'wan', 'epr', 'role', 'VIB'], type=str)
+parser.add_argument('-t', '--theta', default=0.95, type=float)
+parser.add_argument('-b', '--beta', default=1e-4, type=float)
+parser.add_argument('-z', '--z_dim', default=256, type=int)
+
 args = parser.parse_args()
 
 # global logger
+sys.stdout = open(os.devnull, 'w')
 gb_logger, save_dir = initLogger(args)
 
 
@@ -80,7 +89,7 @@ def run_eval_phase(model, P, Z, logger, epoch, phase):
         batch['label_vec_obs'] = batch['label_vec_obs'].to(Z['device'], non_blocking=True)
         # forward pass: 
         with torch.set_grad_enabled(False):
-            batch['logits'] = model(batch['image'])
+            batch['logits'], _, _ = model(batch['image'])
             batch['preds'] = torch.sigmoid(batch['logits'])
             if batch['preds'].dim() == 1:
                 batch['preds'] = torch.unsqueeze(batch['preds'], 0)
@@ -120,28 +129,10 @@ def pseudo_labeling(model, P, Z, logger, epoch, phase):
         else:
             total_preds = np.vstack((batch['preds'].detach().cpu().numpy(), total_preds))
             total_idx = np.hstack((batch['idx'].cpu().numpy(), total_idx))
-
-            # pseudo-label:
-            if P['batch'] >= P['steps_per_epoch'] - 1:
-
-                for i in range(total_preds.shape[1]):  # class-wise
-
-                    class_preds = total_preds[:, i]
-                    class_labels_obs = Z['datasets']['train'].label_matrix_obs[:, i]
-                    class_labels_obs = class_labels_obs[total_idx]
-
-                    # select unlabel data:
-                    unlabel_class_preds = class_preds[class_labels_obs == 0]
-                    unlabel_class_idx = total_idx[class_labels_obs == 0]
-
-                    # select samples:
-                    neg_PL_num = int(P['neg_proportion'] * P['unlabel_num'][i] / (P['num_epochs'] - P['warmup_epoch']))
-                    sorted_idx_loc = np.argsort(unlabel_class_preds)  # ascending
-                    selected_idx_loc = sorted_idx_loc[:neg_PL_num]  # select indices
-
-                    # assgin soft labels:
-                    for loc in selected_idx_loc:
-                        Z['datasets']['train'].label_matrix_obs[unlabel_class_idx[loc], i] = -unlabel_class_preds[loc]
+    label_mtx = np.zeros_like(total_preds)
+    label_mtx[total_preds > P['theta']] = 1
+    Z['datasets']['train'].label_matrix_obs[total_idx] += label_mtx
+    Z['datasets']['train'].label_matrix_obs[Z['datasets']['train'].label_matrix_obs > 1] = 1
 
 
 def train(model, P, Z):
@@ -167,13 +158,13 @@ def train(model, P, Z):
             t_init = time.time()
             if phase == 'train':
                 run_train_phase(model, P, Z, logger, epoch, phase)
-                # if P['epoch'] >= P['warmup_epoch'] and P['loss'] == 'EM_APL':
-                #     pseudo_labeling(model, P, Z, logger, P['epoch'], phase)
+                if P['epoch'] >= P['warmup_epoch'] and P['loss'] == 'VIB':
+                    pseudo_labeling(model, P, Z, logger, P['epoch'], phase)
             else:
                 run_eval_phase(model, P, Z, logger, epoch, phase)
 
             # save end-of-phase metrics:
-            logger.compute_phase_metrics(phase, epoch, model.g.get_estimated_labels())
+            logger.compute_phase_metrics(phase, epoch)
 
             # print epoch status:
             logger.report(t_init, time.time(), phase, epoch, gb_logger)
@@ -182,8 +173,9 @@ def train(model, P, Z):
             new_best = logger.update_best_results(phase, epoch, P['val_set_variant'])
             if new_best:
                 gb_logger.info('*** new best weights ***')
-                best_weights_f = copy.deepcopy(model.f.state_dict())
-                best_weights_g = copy.deepcopy(model.g.state_dict())
+                best_weights_feature_extractor = copy.deepcopy(model.feature_extractor.state_dict())
+                best_weights_encoder_z = copy.deepcopy(model.encoder_z.state_dict())
+                best_weights_linear_classifier = copy.deepcopy(model.linear_classifier.state_dict())
 
     gb_logger.info('')
     gb_logger.info('*** TRAINING COMPLETE ***')
@@ -192,8 +184,12 @@ def train(model, P, Z):
         logger.get_stop_metric('val', logger.best_epoch, P['val_set_variant'])))
     gb_logger.info(
         'Best epoch test score:       {:.2f}'.format(logger.get_stop_metric('test', logger.best_epoch, 'clean')))
+    if 'best_weights_feature_extractor' not in locals():
+        best_weights_feature_extractor = None
+        best_weights_encoder_z = None
+        best_weights_linear_classifier = None
 
-    return P, model, logger, best_weights_f, best_weights_g
+    return P, model, logger, best_weights_feature_extractor, best_weights_encoder_z, best_weights_linear_classifier
 
 
 def initialize_training_run(P, feature_extractor, linear_classifier, estimated_labels):
@@ -258,7 +254,6 @@ def initialize_training_run(P, feature_extractor, linear_classifier, estimated_l
     model = models.MultilabelModel_VIB(P, feature_extractor)
 
     # optimization objects:
-    print(model)
     f_params = [param for param in list(model.parameters()) if param.requires_grad]
     opt_params = [
         {'params': f_params, 'lr': P['lr']},
@@ -271,7 +266,7 @@ def initialize_training_run(P, feature_extractor, linear_classifier, estimated_l
     return P, Z, model
 
 
-def execute_training_run(P, feature_extractor, linear_classifier, estimated_labels=None):
+def execute_training_run(P, feature_extractor, encoder_z_init, linear_classifier):
     '''
     Initialize, run the training process, and save the results.
     
@@ -282,10 +277,11 @@ def execute_training_run(P, feature_extractor, linear_classifier, estimated_labe
     estimated_labels: NumPy array containing estimated training set labels to start from (for ROLE).
     '''
 
-    P, Z, model = initialize_training_run(P, feature_extractor, linear_classifier, estimated_labels)
+    P, Z, model = initialize_training_run(P, feature_extractor, encoder_z_init, linear_classifier)
     model.to(Z['device'])
 
-    P, model, logger, best_weights_f, best_weights_g = train(model, P, Z)
+    P, model, logger, best_weights_feature_extractor, best_weights_encoder_z, best_weights_linear_classifier = train(
+        model, P, Z)
 
     # gb_logger.info('\nSaving best weights for f to {}/best_model_state_f.pt'.format(P['save_path']))
     # torch.save(best_weights_f, os.path.join(P['save_path'], 'best_model_state_f.pt'))
@@ -302,10 +298,10 @@ def execute_training_run(P, feature_extractor, linear_classifier, estimated_labe
     #     json.dump(P, f)
 
     # gb_logger.info('\nReverting model to best weights.')
-    model.f.load_state_dict(best_weights_f)
-    model.g.load_state_dict(best_weights_g)
+    # model.f.load_state_dict(best_weights_f)
+    # model.g.load_state_dict(best_weights_g)
 
-    return model.f.feature_extractor, model.f.linear_classifier, model.g.get_estimated_labels(), final_logs
+    return model.feature_extractor, model.encoder_z, model.linear_classifier, final_logs
 
 
 if __name__ == '__main__':
@@ -376,7 +372,7 @@ if __name__ == '__main__':
 
     # Optimization parameters:
     P['sample_times'] = 5
-    P['warmup_epoch'] = 5
+    P['warmup_epoch'] = 3
     P['z_dim'] = 256
     if P['dataset'] == 'pascal':
         P['bsize'] = 8
@@ -398,6 +394,9 @@ if __name__ == '__main__':
         P['lr'] = 1e-5
         P['beta'] = 1e-4
         P['theta'] = 0.95
+    P['beta'] = args.beta
+    P['theta'] = args.theta
+    P['z_dim'] = args.z_dim
 
     # Dependent parameters:
     if P['loss'] in ['bce', 'bce_ls']:
@@ -443,9 +442,10 @@ if __name__ == '__main__':
         # P['save_path'] = './results/' + P['experiment_name'] + '_' + now_str + '_' + P['dataset']
         # os.makedirs(P['save_path'], exist_ok=False)
         P_temp = copy.deepcopy(P)  # re-set hyperparameter dict
-        (feature_extractor_init, linear_classifier_init, estimated_labels_init, logs) = execute_training_run(P_temp,
-                                                                                                             feature_extractor=None,
-                                                                                                             linear_classifier=None)
+        (feature_extractor_init, encoder_z_init, linear_classifier_init, logs) = execute_training_run(P_temp,
+                                                                                                      feature_extractor=None,
+                                                                                                      encoder_z_init=None,
+                                                                                                      linear_classifier=None)
         gb_logger.info('fine-tuning from trained linear classifier')
     # bsize = 0
     # lr = 0
@@ -462,12 +462,14 @@ if __name__ == '__main__':
         P_temp['freeze_feature_extractor'] = False
         P_temp['use_feats'] = False
         P_temp['arch'] = 'resnet50'
-        (feature_extractor, linear_classifier, estimated_labels, logs) = execute_training_run(P_temp,
-                                                                                              feature_extractor=feature_extractor_init,
-                                                                                              linear_classifier=linear_classifier_init,
-                                                                                              estimated_labels=estimated_labels_init)
+        (feature_extractor, encoder_z, linear_classifier, logs) = execute_training_run(P_temp,
+                                                                                       feature_extractor=feature_extractor_init,
+                                                                                       encoder_z_init=encoder_z_init,
+                                                                                       linear_classifier=linear_classifier_init)
     else:
         # os.makedirs(P['save_path'], exist_ok=False)
-        (feature_extractor, linear_classifier, estimated_labels, logs) = execute_training_run(P_temp,
-                                                                                              feature_extractor=None,
-                                                                                              linear_classifier=None)
+        (feature_extractor, encoder_z, linear_classifier, logs) = execute_training_run(P_temp,
+                                                                                       feature_extractor=None,
+                                                                                       encoder_z_init=None,
+                                                                                       linear_classifier=None
+                                                                                       )

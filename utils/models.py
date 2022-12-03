@@ -209,9 +209,9 @@ class MultilabelModel_VIB(torch.nn.Module):
         mu_list = []
         std_list = []
         for enc in self.encoder_z:
-            statistics = enc(extracted_feat)
+            statistics = enc(torch.squeeze(extracted_feat))
             z_mu = statistics[:, :self.z_dim]
-            z_std = F.softplus(statistics[:, self.z_dim])
+            z_std = F.softplus(statistics[:, self.z_dim:])
             mu_list.append(z_mu)
             std_list.append(z_std)
             normal_sample_machine = torch.distributions.normal.Normal(z_mu, z_std)
