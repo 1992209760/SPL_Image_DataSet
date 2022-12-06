@@ -18,7 +18,7 @@ parser.add_argument('-l', '--loss', default='role', choices=['bce', 'bce_ls', 'i
 args = parser.parse_args()
 
 # global logger
-gb_logger, save_dir = initLogger(args)
+gb_logger, save_dir = initLogger(args, save_dir='results_LEM/')
 
 
 def run_train_phase(model, P, Z, logger, epoch, phase):
@@ -202,7 +202,7 @@ def initialize_training_run(P, feature_extractor, linear_classifier, estimated_l
         )
 
     # model:
-    model = models.MultilabelModel(P, feature_extractor, linear_classifier, observed_label_matrix, estimated_labels)
+    model = models.MultilabelModel(P, feature_extractor, linear_classifier, observed_label_matrix, estimated_labels, LEM=True)
 
     # optimization objects:
     f_params = [param for param in list(model.f.parameters()) if param.requires_grad]
@@ -253,7 +253,8 @@ def execute_training_run(P, feature_extractor, linear_classifier, estimated_labe
     model.f.load_state_dict(best_weights_f)
     model.g.load_state_dict(best_weights_g)
 
-    return model.f.feature_extractor, model.f.linear_classifier, model.g.get_estimated_labels(), final_logs
+    # return model.f.feature_extractor, model.f.linear_classifier, model.g.get_estimated_labels(), final_logs
+    return None, None, None, final_logs
 
 
 if __name__ == '__main__':

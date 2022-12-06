@@ -4,10 +4,9 @@ import torch.nn.functional as F
 import torch.distributed as dist
 import math
 
-
-from models.backbone import build_backbone
-from models.encoder import build_encoder
-from utils.helper import clean_state_dict
+from .backbone import build_backbone
+from .encoder import build_encoder
+from ..utils.helper import clean_state_dict
 
 NUM_CHANNEL = {
     'resnet18': 512,
@@ -17,9 +16,9 @@ NUM_CHANNEL = {
 }
 
 NUM_CLASS = {
-    'voc': 20,
+    'pascal': 20,
     'coco': 80,
-    'nus': 81,
+    'nuswide': 81,
     'cub': 312,
 }
 

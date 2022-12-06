@@ -16,7 +16,7 @@ parser.add_argument('-l', '--loss', default='EM_APL', choices=['bce', 'iun', 'an
 args = parser.parse_args()
 
 # global logger
-gb_logger, save_dir = initLogger(args)
+gb_logger, save_dir = initLogger(args, save_dir='results_LEM/')
 
 
 def run_train_phase(model, P, Z, logger, epoch, phase):
@@ -242,7 +242,8 @@ def execute_training_run(P, feature_extractor, linear_classifier):
     final_logs = logger.get_logs()
     model.f.load_state_dict(best_weights_f)
 
-    return model.f.feature_extractor, model.f.linear_classifier, final_logs
+    # return model.f.feature_extractor, model.f.linear_classifier, final_logs
+    return None, None, final_logs
 
 
 def aysmmetric_pseudo_labeling(model, P, Z, logger, epoch, phase):

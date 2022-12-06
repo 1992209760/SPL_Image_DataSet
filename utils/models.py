@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import torch
 import numpy as np
 import copy
@@ -6,6 +8,8 @@ from torch import nn
 from torchvision.models import resnet50
 import torch.nn.functional as F
 from collections import OrderedDict
+
+from lib_lagc.models.LEModel import build_LEModel
 
 '''
 utility functions
@@ -148,10 +152,19 @@ class LabelEstimator(torch.nn.Module):
 
 
 class MultilabelModel(torch.nn.Module):
-    def __init__(self, P, feature_extractor, linear_classifier, observed_label_matrix, estimated_labels=None):
+    def __init__(self, P, feature_extractor, linear_classifier, observed_label_matrix, estimated_labels=None, LEM=False):
         super(MultilabelModel, self).__init__()
 
-        self.f = ImageClassifier(P, feature_extractor, linear_classifier)
+        if LEM:
+            args = SimpleNamespace()
+            args.dataset_name = P['dataset']
+            args.backbone = P['arch']
+            args.is_proj = False
+            args.img_size = 448
+            args.feat_dim = 128
+            self.f = build_LEModel(args)
+        else:
+            self.f = ImageClassifier(P, feature_extractor, linear_classifier)
 
         self.g = LabelEstimator(P, observed_label_matrix, estimated_labels)
 
@@ -162,9 +175,18 @@ class MultilabelModel(torch.nn.Module):
 
 
 class MultilabelModel_EM(torch.nn.Module):
-    def __init__(self, P, feature_extractor, linear_classifier):
+    def __init__(self, P, feature_extractor, linear_classifier, LEM=False):
         super(MultilabelModel_EM, self).__init__()
-        self.f = ImageClassifier(P, feature_extractor, linear_classifier)
+        if LEM:
+            args = SimpleNamespace()
+            args.dataset_name = P['dataset']
+            args.backbone = P['arch']
+            args.is_proj = False
+            args.img_size = 448
+            args.feat_dim = 128
+            self.f = build_LEModel(args)
+        else:
+            self.f = ImageClassifier(P, feature_extractor, linear_classifier)
 
     def forward(self, batch):
         f_logits = self.f(batch['image'])
@@ -224,7 +246,7 @@ class MultilabelModel_VIB(torch.nn.Module):
         encode_z = nn.Sequential(
             nn.Linear(feat_dim, 1024),
             nn.ReLU(True),
-            nn.Linear(1024, 1024),
-            nn.ReLU(True),
+            # nn.Linear(1024, 1024),
+            # nn.ReLU(True),
             nn.Linear(1024, 2 * z_dim))
         return encode_z

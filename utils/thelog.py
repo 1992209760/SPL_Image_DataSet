@@ -45,9 +45,9 @@ def get_logger(name=None, dir=None, logFileName=None):
     return logger
 
 
-def initLogger(args):
+def initLogger(args, save_dir='results/'):
     id = str(time.time())
-    save_dir = 'results/' + str(args.loss) + '/' + '/'.join([str(args.dataset)]) + '/' + id
+    save_dir = save_dir + str(args.loss) + '/' + '/'.join([str(args.dataset)]) + '/' + id
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
         os.makedirs(save_dir + '/result_data')
