@@ -14,7 +14,6 @@ import torch.utils.data
 
 from torch.utils.tensorboard import SummaryWriter
 
-import _init_paths
 from lib_lagc.dataset.get_dataset import get_datasets
 
 from lib_lagc.models.LEModel import build_LEModel

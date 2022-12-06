@@ -4,12 +4,12 @@ import numpy as np
 from randaugment import RandAugment
 import torchvision.transforms as transforms
 from PIL import ImageDraw
-from lib_lagc.dataset.handlers import COCO2014_handler, VOC2012_handler, NUS_WIDE_handler, CUB_200_2011_handler
+from .handlers import COCO2014_handler, VOC2012_handler, NUS_WIDE_handler, CUB_200_2011_handler
 
 HANDLER_DICT = {
-    'voc': VOC2012_handler,
+    'pascal': VOC2012_handler,
     'coco': COCO2014_handler,
-    'nus': NUS_WIDE_handler,
+    'nuswide': NUS_WIDE_handler,
     'cub': CUB_200_2011_handler,
 }
 

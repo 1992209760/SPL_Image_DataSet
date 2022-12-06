@@ -14,7 +14,6 @@ import torch.utils.data
 
 from torch.utils.tensorboard import SummaryWriter
 
-import _init_paths
 from lib_lagc.dataset.get_dataset import get_datasets
 
 from lib_lagc.models.LEModel import build_LEModel
@@ -25,14 +24,13 @@ from lib_lagc.utils.helper import clean_state_dict, function_mAP, get_raw_dict, 
 
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"
 
 def parser_args():
     parser = argparse.ArgumentParser(description='First Training')
     
 
     # data
-    parser.add_argument('--dataset_name', help='dataset name', default='coco', choices=['voc', 'coco', 'nus', 'cub'])
+    parser.add_argument('--dataset_name', help='dataset name', default='pascal', choices=['pascal', 'coco', 'nuswide', 'cub'])
     parser.add_argument('--dataset_dir', help='dir of all datasets', default='./data')
     parser.add_argument('--img_size', default=448, type=int,
                         help='size of input images')
@@ -56,7 +54,7 @@ def parser_args():
                         help='interval of validation')
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='manual epoch number (useful on restarts)')
-    parser.add_argument('-b', '--batch_size', default=32, type=int,
+    parser.add_argument('-b', '--batch_size', default=16, type=int,
                         help='batch size')
     parser.add_argument('--lr', '--learning_rate', default=1e-4, type=float,
                         metavar='LR', help='initial learning rate', dest='lr')
@@ -109,6 +107,7 @@ def get_args():
 
 def main():
     args = get_args()
+
 
     if args.seed is not None:
         random.seed(args.seed)
