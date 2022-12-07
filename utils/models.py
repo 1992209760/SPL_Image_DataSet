@@ -193,6 +193,22 @@ class MultilabelModel_EM(torch.nn.Module):
         return f_logits
 
 
+class MultilabelModel_LAGC(torch.nn.Module):
+    def __init__(self, P, is_proj=False):
+        super(MultilabelModel_LAGC, self).__init__()
+        args = SimpleNamespace()
+        args.dataset_name = P['dataset']
+        args.backbone = P['arch']
+        args.is_proj = is_proj
+        args.img_size = 448
+        args.feat_dim = P['z_dim']
+        self.f = build_LEModel(args)
+
+    def forward(self, batch):
+        f_logits = self.f(batch['image'])
+        return f_logits
+
+
 class MultilabelModel_VIB(torch.nn.Module):
     def __init__(self, P, model_feature_extractor):
         super(MultilabelModel_VIB, self).__init__()
