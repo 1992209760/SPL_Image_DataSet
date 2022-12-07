@@ -1,25 +1,31 @@
 import os
 import copy
 import time
+from types import SimpleNamespace
+
 import numpy as np
 import torch
+
+from lib_lagc.dataset.get_dataset import get_datasets
+from lib_lagc.utils.helper import ModelEma
 from utils import datasets, models
 import argparse
 from utils.losses import compute_batch_loss
 from utils.instrumentation import train_logger
 from utils.thelog import initLogger
+import torch.nn.functional as F
 
 parser = argparse.ArgumentParser(description='AckTheUnknown-ECCV2022')
 parser.add_argument('-g', '--gpu', default=0, type=int)
 parser.add_argument('-d', '--dataset', default='pascal', choices=['pascal', 'coco', 'nuswide', 'cub'], type=str)
-parser.add_argument('-l', '--loss', default='EM_APL', choices=['bce', 'iun', 'an', 'EM', 'EM_APL'], type=str)
+parser.add_argument('-l', '--loss', default='lagc', choices=['lagc'], type=str)
 args = parser.parse_args()
 
 # global logger
 gb_logger, save_dir = initLogger(args, save_dir='results_LEM/')
 
 
-def run_train_phase(model, P, Z, logger, epoch, phase):
+def run_train_phase(model, ema_m, P, Z, logger, epoch, phase):
 
     '''
     Run one training phase.
@@ -36,25 +42,49 @@ def run_train_phase(model, P, Z, logger, epoch, phase):
     assert phase == 'train'
     model.train()
 
-    for batch in Z['dataloaders'][phase]:
-        # move data to GPU:
-        batch['image'] = batch['image'].to(Z['device'], non_blocking=True)
-        batch['labels_np'] = batch['label_vec_obs'].clone().numpy()  # copy of labels for use in metrics
-        batch['label_vec_obs'] = batch['label_vec_obs'].to(Z['device'], non_blocking=True)
-        # forward pass:
+    for i, ((inputs_w, inputs_s), targets, idx) in enumerate(Z['dataloaders'][phase]):
+        batch_size = inputs_w.size(0)
+
+        inputs = torch.cat([inputs_w, inputs_s], dim=0).cuda(non_blocking=True)
+        targets = targets.cuda(non_blocking=True).float()
+        with torch.cuda.amp.autocast(enabled=True):
+            logits = model.f(inputs)
+        logits_w, logits_s = torch.split(logits[:], batch_size)
+
+        L_an = F.binary_cross_entropy_with_logits(logits_w, targets, reduction='mean')
+
+        pseudo_label = torch.sigmoid(logits_w.detach()) + targets
+        pseudo_label_mask = ((pseudo_label >= P['threshold']) | (pseudo_label < (1 - P['threshold']))).float()
+        pseudo_label_hard = (pseudo_label >= P['threshold']).float()
+
+        L_plc = (F.binary_cross_entropy_with_logits(logits_s, pseudo_label_hard,
+                                                    reduction='none') * pseudo_label_mask).sum() / pseudo_label_mask.sum()
+
+        loss = L_an + P['lambda_plc'] * L_plc
         Z['optimizer'].zero_grad()
-        with torch.set_grad_enabled(True):
-            batch['logits'] = model.f(batch['image'])
-            batch['preds'] = torch.sigmoid(batch['logits'])
-            if batch['preds'].dim() == 1:
-                batch['preds'] = torch.unsqueeze(batch['preds'], 0)
-            batch['preds_np'] = batch['preds'].clone().detach().cpu().numpy()  # copy of preds for use in metrics
-            batch = compute_batch_loss(batch, P, Z)
-        # backward pass:
-        batch['loss_tensor'].backward()
+        loss.backward()
         Z['optimizer'].step()
-        # save current batch data:
-        logger.update_phase_data(batch)
+        ema_m.update(model)
+
+    # for batch in Z['dataloaders'][phase]:
+    #     # move data to GPU:
+    #     batch['image'] = batch['image'].to(Z['device'], non_blocking=True)
+    #     batch['labels_np'] = batch['label_vec_obs'].clone().numpy()  # copy of labels for use in metrics
+    #     batch['label_vec_obs'] = batch['label_vec_obs'].to(Z['device'], non_blocking=True)
+    #     # forward pass:
+    #     Z['optimizer'].zero_grad()
+    #     with torch.set_grad_enabled(True):
+    #         batch['logits'] = model.f(batch['image'])
+    #         batch['preds'] = torch.sigmoid(batch['logits'])
+    #         if batch['preds'].dim() == 1:
+    #             batch['preds'] = torch.unsqueeze(batch['preds'], 0)
+    #         batch['preds_np'] = batch['preds'].clone().detach().cpu().numpy()  # copy of preds for use in metrics
+    #         batch = compute_batch_loss(batch, P, Z)
+    #     # backward pass:
+    #     batch['loss_tensor'].backward()
+    #     Z['optimizer'].step()
+    #     # save current batch data:
+    #     logger.update_phase_data(batch)
 
 
 def run_eval_phase(model, P, Z, logger, epoch, phase):
@@ -73,12 +103,13 @@ def run_eval_phase(model, P, Z, logger, epoch, phase):
 
     assert phase in ['val', 'test']
     model.eval()
-    for batch in Z['dataloaders'][phase]:
-        # move data to GPU:
-        batch['image'] = batch['image'].to(Z['device'], non_blocking=True)
-        batch['labels_np'] = batch['label_vec_obs'].clone().numpy()  # copy of labels for use in metrics
-        batch['label_vec_obs'] = batch['label_vec_obs'].to(Z['device'], non_blocking=True)
-        # forward pass:
+    for i, (inputs, targets, idx) in enumerate(Z['dataloaders'][phase]):
+        batch = {}
+        batch['idx'] = idx
+        batch['image'] = inputs.to(Z['device'], non_blocking=True)
+        batch['labels_np'] = targets.clone().numpy()  # copy of labels for use in metrics
+        batch['label_vec_obs'] = targets.to(Z['device'], non_blocking=True)
+        batch['label_vec_true'] = targets.to(Z['device'], non_blocking=True)
         with torch.set_grad_enabled(False):
             batch['logits'] = model.f(batch['image'])
             batch['preds'] = torch.sigmoid(batch['logits'])
@@ -91,7 +122,7 @@ def run_eval_phase(model, P, Z, logger, epoch, phase):
         logger.update_phase_data(batch)
 
 
-def train(model, P, Z):
+def train(model, ema_m, P, Z):
 
     '''
     Train the model.
@@ -101,7 +132,7 @@ def train(model, P, Z):
     Z: Dictionary of temporary objects used during training.
     '''
 
-    best_weights_f = copy.deepcopy(model.f.state_dict())
+    best_weights = copy.deepcopy(model.f.state_dict())
     logger = train_logger(P) # initialize logger
     if_early_stop = False
 
@@ -115,23 +146,21 @@ def train(model, P, Z):
             # run one phase:
             t_init = time.time()
             if phase == 'train':
-                run_train_phase(model, P, Z, logger, P['epoch'], phase)
-                if P['epoch'] >= P['warmup_epoch'] and P['loss'] == 'EM_APL':
-                    aysmmetric_pseudo_labeling(model, P, Z, logger, P['epoch'], phase)
+                run_train_phase(model, ema_m, P, Z, logger, P['epoch'], phase)
             else:
                 run_eval_phase(model, P, Z, logger, P['epoch'], phase)
 
             # save end-of-phase metrics:
-            logger.compute_phase_metrics(phase, P['epoch'])
-
-            # print epoch status:
-            logger.report(t_init, time.time(), phase, P['epoch'], gb_logger)
+            if phase in ['val', 'test']:
+                logger.compute_phase_metrics(phase, P['epoch'])
+                # print epoch status:
+                logger.report(t_init, time.time(), phase, P['epoch'], gb_logger)
 
             # update best epoch, if applicable:
             new_best = logger.update_best_results(phase, P['epoch'], P['val_set_variant'])
             if new_best:
                 gb_logger.info('*** new best weights ***')
-                best_weights_f = copy.deepcopy(model.f.state_dict())
+                best_weights = copy.deepcopy(model.f.state_dict())
             elif (not new_best) and (phase == 'val'):
                 gb_logger.info('*** early stop ***')
                 if_early_stop = True
@@ -146,10 +175,10 @@ def train(model, P, Z):
     gb_logger.info('Best epoch validation score: {:.2f}'.format(logger.get_stop_metric('val', logger.best_epoch, P['val_set_variant'])))
     gb_logger.info('Best epoch test score:       {:.2f}'.format(logger.get_stop_metric('test', logger.best_epoch, 'clean')))
 
-    return P, model, logger, best_weights_f
+    return P, model, ema_m, logger, best_weights
 
 
-def initialize_training_run(P, feature_extractor, linear_classifier):
+def initialize_training_run(P):
 
     '''
     Set up for model training.
@@ -169,10 +198,16 @@ def initialize_training_run(P, feature_extractor, linear_classifier):
     Z['device'] = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # data:
-    Z['datasets'] = datasets.get_data(P)
+    # Z['datasets'] = datasets.get_data(P)
+    args = SimpleNamespace()
+    args.img_size = 448
+    args.dataset_name = P['dataset']
+    args.dataset_dir = './data/' + args.dataset_name
+    train_dataset, val_dataset, test_dataset = get_datasets(args)
+    Z['datasets'] = {'train': train_dataset, 'val': val_dataset, 'test': test_dataset}
 
     # observed label matrix:
-    label_matrix = Z['datasets']['train'].label_matrix
+    label_matrix = Z['datasets']['train'].Y
     num_examples = int(np.shape(label_matrix)[0])
     mtx = np.array(label_matrix).astype(np.int8)
     total_pos = np.sum(mtx == 1)
@@ -180,7 +215,7 @@ def initialize_training_run(P, feature_extractor, linear_classifier):
     gb_logger.info('training samples: {} total'.format(num_examples))
     gb_logger.info('true positives: {} total, {:.2f} per example on average.'.format(total_pos, total_pos / num_examples))
     gb_logger.info('true negatives: {} total, {:.2f} per example on average.'.format(total_neg, total_neg / num_examples))
-    observed_label_matrix = Z['datasets']['train'].label_matrix_obs
+    observed_label_matrix = Z['datasets']['train'].Y
     num_examples = int(np.shape(observed_label_matrix)[0])
     obs_mtx = np.array(observed_label_matrix).astype(np.int8)
     obs_total_pos = np.sum(obs_mtx == 1)
@@ -209,17 +244,20 @@ def initialize_training_run(P, feature_extractor, linear_classifier):
         P['unlabel_num'].append(np.sum(observed_label_matrix[:, i] == 0))
 
     # model:
-    model = models.MultilabelModel_EM(P, feature_extractor, linear_classifier)
+    model = models.MultilabelModel_LAGC(P)
+    ema_m = ModelEma(model, 0.9997)  # 0.9997
 
-    # optimization objects:
-    f_params = [param for param in list(model.f.parameters()) if param.requires_grad]
-
-    Z['optimizer'] = torch.optim.Adam(
-        f_params,
-        lr=P['lr']
+    param_dicts = [
+        {"params": [p for n, p in model.f.named_parameters() if p.requires_grad]},
+    ]
+    lr_mult = P['bsize'] / 256
+    Z['optimizer'] = getattr(torch.optim, 'AdamW')(
+        param_dicts,
+        lr_mult * P['lr'],
+        betas=(0.9, 0.999), eps=1e-08, weight_decay=P['wd']
     )
 
-    return P, Z, model
+    return P, Z, model, ema_m
 
 
 def execute_training_run(P, feature_extractor, linear_classifier):
@@ -234,70 +272,17 @@ def execute_training_run(P, feature_extractor, linear_classifier):
     estimated_labels: NumPy array containing estimated training set labels to start from (for ROLE).
     '''
 
-    P, Z, model = initialize_training_run(P, feature_extractor, linear_classifier)
+    P, Z, model, ema_m = initialize_training_run(P)
     model.to(Z['device'])
+    ema_m.to(Z['device'])
 
-    P, model, logger, best_weights_f = train(model, P, Z)
+    P, model, ema_m, logger, best_weights_f = train(model, ema_m, P, Z)
 
     final_logs = logger.get_logs()
     model.f.load_state_dict(best_weights_f)
 
     # return model.f.feature_extractor, model.f.linear_classifier, final_logs
     return None, None, final_logs
-
-
-def aysmmetric_pseudo_labeling(model, P, Z, logger, epoch, phase):
-
-    assert phase == 'train'
-    model.eval()
-
-    total_preds = None
-    total_idx = None
-    P['steps_per_epoch'] = len(Z['dataloaders'][phase])
-
-    for i, batch in enumerate(Z['dataloaders'][phase]):
-
-        P['batch'] = i
-
-        # move data to GPU:
-        batch['image'] = batch['image'].to(Z['device'], non_blocking=True)
-
-        # forward pass:
-        with torch.set_grad_enabled(False):
-            batch['logits'] = model.f(batch['image'])
-            batch['preds'] = torch.sigmoid(batch['logits'])
-            if batch['preds'].dim() == 1:
-                batch['preds'] = torch.unsqueeze(batch['preds'], 0)
-
-        # gather:
-        if P['batch'] == 0:
-            total_preds = batch['preds'].detach().cpu().numpy()
-            total_idx = batch['idx'].cpu().numpy()
-        else:
-            total_preds = np.vstack((batch['preds'].detach().cpu().numpy(), total_preds))
-            total_idx = np.hstack((batch['idx'].cpu().numpy(), total_idx))
-
-            # pseudo-label:
-            if P['batch'] >= P['steps_per_epoch'] - 1:
-
-                for i in range(total_preds.shape[1]):  # class-wise
-
-                    class_preds = total_preds[:, i]
-                    class_labels_obs = Z['datasets']['train'].label_matrix_obs[:, i]
-                    class_labels_obs = class_labels_obs[total_idx]
-
-                    # select unlabel data:
-                    unlabel_class_preds = class_preds[class_labels_obs == 0]
-                    unlabel_class_idx = total_idx[class_labels_obs == 0]
-
-                    # select samples:
-                    neg_PL_num = int(P['neg_proportion'] * P['unlabel_num'][i] / (P['num_epochs'] - P['warmup_epoch']))
-                    sorted_idx_loc = np.argsort(unlabel_class_preds)  # ascending
-                    selected_idx_loc = sorted_idx_loc[:neg_PL_num]  # select indices
-
-                    # assgin soft labels:
-                    for loc in selected_idx_loc:
-                        Z['datasets']['train'].label_matrix_obs[unlabel_class_idx[loc], i] = -unlabel_class_preds[loc]
 
 
 if __name__ == '__main__':
@@ -319,34 +304,27 @@ if __name__ == '__main__':
     P['val_set_variant'] = 'clean'  # clean, observed
 
     # Optimization parameters:
+    P['lambda_plc'] = 1
+    P['threshold'] = 0.6
     if P['dataset'] == 'pascal':
         P['bsize'] = 8
-        P['lr'] = 1e-5
-        P['alpha'] = 0.2
-        P['neg_proportion'] = 0.9
-        P['warmup_epoch'] = 5
-        P['beta'] = 0.02
+        P['lr'] = 1e-4
+        P['wd'] = 1e-2
+
     elif P['dataset'] == 'cub':
         P['bsize'] = 8
         P['lr'] = 1e-4
-        P['alpha'] = 0.01
-        P['neg_proportion'] = 0.9
-        P['warmup_epoch'] = 3
-        P['beta'] = 0.4
+        P['wd'] = 1e-2
+
     elif P['dataset'] == 'nuswide':
-        P['bsize'] = 16
-        P['lr'] = 1e-5
-        P['alpha'] = 0.1
-        P['neg_proportion'] = 0.9
-        P['warmup_epoch'] = 4
-        P['beta'] = 0.2
+        P['bsize'] = 8
+        P['lr'] = 1e-4
+        P['wd'] = 1e-2
+
     elif P['dataset'] == 'coco':
-        P['bsize'] = 16
-        P['lr'] = 1e-5
-        P['alpha'] = 0.1
-        P['neg_proportion'] = 0.9
-        P['warmup_epoch'] = 5
-        P['beta'] = 0.9
+        P['bsize'] = 8
+        P['lr'] = 1e-4
+        P['wd'] = 1e-2
 
     # Additional parameters:
     P['seed'] = 1200  # overall numpy seed
@@ -374,6 +352,7 @@ if __name__ == '__main__':
     P['arch'] = 'resnet50'
     P['feature_extractor_arch'] = 'resnet50'
     P['feat_dim'] = 2048
+    P['z_dim'] = 128
 
     # run training process:
     gb_logger.info('[{} + {}] start exp ...'.format(P['dataset'], P['loss']))

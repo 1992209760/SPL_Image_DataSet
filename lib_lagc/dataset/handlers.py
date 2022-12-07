@@ -9,6 +9,7 @@ class COCO2014_handler(Dataset):
     def __init__(self, X, Y, data_path, transform=None):
         self.X = X
         self.Y = Y
+        self.num_classes = 80
         self.transform = transform
         self.data_path = data_path
 
@@ -16,7 +17,7 @@ class COCO2014_handler(Dataset):
         x = Image.open(self.data_path + '/' + self.X[index]).convert('RGB')
         x = self.transform(x)
         y = self.Y[index]
-        return x, y
+        return x, y, index
 
     def __len__(self):
         return len(self.X)
@@ -26,6 +27,7 @@ class CUB_200_2011_handler(Dataset):
     def __init__(self, X, Y, data_path, transform=None):
         self.X = X
         self.Y = Y
+        self.num_classes = 312
         self.transform = transform
         self.data_path = f'{data_path}/CUB_200_2011/images'
 
@@ -33,7 +35,7 @@ class CUB_200_2011_handler(Dataset):
         x = Image.open(self.data_path + '/' + self.X[index]).convert('RGB')
         x = self.transform(x)
         y = self.Y[index]
-        return x, y
+        return x, y, index
 
     def __len__(self):
         return len(self.X)
@@ -43,6 +45,7 @@ class NUS_WIDE_handler(Dataset):
     def __init__(self, X, Y, data_path, transform=None):
         self.X = X
         self.Y = Y
+        self.num_classes = 81
         self.transform = transform
         self.data_path = f'{data_path}/Flickr'
 
@@ -50,7 +53,7 @@ class NUS_WIDE_handler(Dataset):
         x = Image.open(self.data_path + '/' + self.X[index]).convert('RGB')
         x = self.transform(x)
         y = self.Y[index]
-        return x, y
+        return x, y, index
 
     def __len__(self):
         return len(self.X)
@@ -60,6 +63,7 @@ class VOC2012_handler(Dataset):
     def __init__(self, X, Y, data_path, transform=None):
         self.X = X
         self.Y = Y
+        self.num_classes = 20
         self.transform = transform
         self.data_path = f'{data_path}/VOCdevkit/VOC2012'
 
@@ -67,7 +71,7 @@ class VOC2012_handler(Dataset):
         x = Image.open(self.data_path + '/JPEGImages/' + self.X[index]).convert('RGB')
         x = self.transform(x)
         y = self.Y[index]
-        return x, y
+        return x, y, index
 
     def __len__(self):
         return len(self.X)
