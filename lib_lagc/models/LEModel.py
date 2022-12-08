@@ -127,6 +127,64 @@ class LEModel(nn.Module):
                   .format(path, checkpoint['epoch']))
 
 
+class LEModel_VIB(nn.Module):
+    def __init__(self, backbone, encoder, num_class, feat_dim):
+        """[summary]
+
+        Args:
+            backbone : backbone model.
+            encoder : encoder model.
+            num_class : number of classes. (80 for MSCOCO).
+            feat_dim : dimension of features.
+            is_proj : open/close a projector.
+        """
+        super().__init__()
+        self.backbone = backbone
+        self.encoder = encoder
+        self.num_class = num_class
+        self.feat_dim = feat_dim
+
+        hidden_dim = encoder.d_model
+        self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
+        self.query_embed = nn.Embedding(num_class, hidden_dim)
+        self.fc = GroupWiseLinear(num_class, feat_dim, bias=True)
+        self.proj = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, 2 * feat_dim)
+        )
+
+    def forward(self, input):
+        # import ipdb; ipdb.set_trace()
+        src, pos = self.backbone(input)
+        src, pos = src[-1], pos[-1]
+
+        query_input = self.query_embed.weight
+        hs = self.encoder(self.input_proj(src), query_input, pos)[0]  # B,K,d
+        statistics = hs[-1]
+        statistics = self.proj(statistics)
+        z_mu = statistics[:, :, :self.feat_dim]
+        z_std = F.softplus(statistics[:, :, self.feat_dim:])
+        normal_sample_machine = torch.distributions.normal.Normal(z_mu, z_std)
+        z = normal_sample_machine.rsample()
+        out = self.fc(z)
+
+        return out, z_mu, z_std
+
+    def finetune_paras(self):
+        from itertools import chain
+        return chain(self.transformer.parameters(), self.fc.parameters(), self.input_proj.parameters(),
+                     self.query_embed.parameters())
+
+    def load_backbone(self, path):
+        print("=> loading checkpoint '{}'".format(path))
+        checkpoint = torch.load(path, map_location=torch.device(dist.get_rank()))
+        # import ipdb; ipdb.set_trace()
+        self.backbone[0].body.load_state_dict(clean_state_dict(checkpoint['state_dict']), strict=False)
+        print("=> loaded checkpoint '{}' (epoch {})"
+              .format(path, checkpoint['epoch']))
+
+
 def build_LEModel(args):
     args.num_class = NUM_CLASS[args.dataset_name]
     args.hidden_dim = NUM_CHANNEL[args.backbone]
@@ -142,6 +200,26 @@ def build_LEModel(args):
         is_proj = args.is_proj,
     )
     
+    model.input_proj = nn.Identity()
+    print("set model.input_proj to Indentify!")
+
+    return model
+
+
+def build_LEModel_VIB(args):
+    args.num_class = NUM_CLASS[args.dataset_name]
+    args.hidden_dim = NUM_CHANNEL[args.backbone]
+
+    backbone = build_backbone(args)
+    encoder = build_encoder(args)
+
+    model = LEModel_VIB(
+        backbone=backbone,
+        encoder=encoder,
+        num_class=args.num_class,
+        feat_dim=args.feat_dim,
+    )
+
     model.input_proj = nn.Identity()
     print("set model.input_proj to Indentify!")
 

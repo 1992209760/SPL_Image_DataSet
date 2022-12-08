@@ -4,10 +4,13 @@ import copy
 import sys
 import time
 import json
+from types import SimpleNamespace
 
 import numpy
 import numpy as np
 import torch
+
+from lib_lagc.models.LEModel import build_LEModel_VIB
 from utils import datasets, models
 from utils.losses import compute_batch_loss
 import datetime
@@ -27,7 +30,7 @@ args = parser.parse_args()
 
 # global logger
 sys.stdout = open(os.devnull, 'w')
-gb_logger, save_dir = initLogger(args)
+gb_logger, save_dir = initLogger(args, save_dir='results_LEM/')
 
 
 def run_train_phase(model, P, Z, logger, epoch, phase):
@@ -87,7 +90,7 @@ def run_eval_phase(model, P, Z, logger, epoch, phase):
         batch['image'] = batch['image'].to(Z['device'], non_blocking=True)
         batch['labels_np'] = batch['label_vec_obs'].clone().numpy()  # copy of labels for use in metrics
         batch['label_vec_obs'] = batch['label_vec_obs'].to(Z['device'], non_blocking=True)
-        # forward pass: 
+        # forward pass:
         with torch.set_grad_enabled(False):
             batch['logits'], _, _ = model(batch['image'])
             batch['preds'] = torch.sigmoid(batch['logits'])
@@ -173,9 +176,9 @@ def train(model, P, Z):
             new_best = logger.update_best_results(phase, epoch, P['val_set_variant'])
             if new_best:
                 gb_logger.info('*** new best weights ***')
-                best_weights_feature_extractor = copy.deepcopy(model.feature_extractor.state_dict())
-                best_weights_encoder_z = copy.deepcopy(model.encoder_z.state_dict())
-                best_weights_linear_classifier = copy.deepcopy(model.linear_classifier.state_dict())
+                # best_weights_feature_extractor = copy.deepcopy(model.feature_extractor.state_dict())
+                # best_weights_encoder_z = copy.deepcopy(model.encoder_z.state_dict())
+                # best_weights_linear_classifier = copy.deepcopy(model.linear_classifier.state_dict())
 
     gb_logger.info('')
     gb_logger.info('*** TRAINING COMPLETE ***')
@@ -189,7 +192,8 @@ def train(model, P, Z):
         best_weights_encoder_z = None
         best_weights_linear_classifier = None
 
-    return P, model, logger, best_weights_feature_extractor, best_weights_encoder_z, best_weights_linear_classifier
+    # return P, model, logger, best_weights_feature_extractor, best_weights_encoder_z, best_weights_linear_classifier
+    return P, model, logger, None, None, None
 
 
 def initialize_training_run(P, feature_extractor, linear_classifier, estimated_labels):
@@ -251,7 +255,13 @@ def initialize_training_run(P, feature_extractor, linear_classifier, estimated_l
         )
 
     # model:
-    model = models.MultilabelModel_VIB(P, feature_extractor)
+    # model = models.MultilabelModel_VIB(P, feature_extractor)
+    args = SimpleNamespace()
+    args.dataset_name = P['dataset']
+    args.backbone = P['arch']
+    args.img_size = 448
+    args.feat_dim = P['z_dim']
+    model = build_LEModel_VIB(args)
 
     # optimization objects:
     f_params = [param for param in list(model.parameters()) if param.requires_grad]
@@ -283,25 +293,11 @@ def execute_training_run(P, feature_extractor, encoder_z_init, linear_classifier
     P, model, logger, best_weights_feature_extractor, best_weights_encoder_z, best_weights_linear_classifier = train(
         model, P, Z)
 
-    # gb_logger.info('\nSaving best weights for f to {}/best_model_state_f.pt'.format(P['save_path']))
-    # torch.save(best_weights_f, os.path.join(P['save_path'], 'best_model_state_f.pt'))
-    # gb_logger.info('\nSaving best weights for g to {}/best_model_state_g.pt'.format(P['save_path']))
-    # torch.save(best_weights_g, os.path.join(P['save_path'], 'best_model_state_g.pt'))
-
     final_logs = logger.get_logs()
-    # gb_logger.info('\nSaving session data to {}/logs.json'.format(P['save_path']))
-    # with open(os.path.join(P['save_path'], 'logs.json'), 'w') as f:
-    #     json.dump(final_logs, f)
-    #
-    # gb_logger.info('\nSaving session data to {}/params.json'.format(P['save_path']))
-    # with open(os.path.join(P['save_path'], 'params.json'), 'w') as f:
-    #     json.dump(P, f)
 
-    # gb_logger.info('\nReverting model to best weights.')
-    # model.f.load_state_dict(best_weights_f)
-    # model.g.load_state_dict(best_weights_g)
 
-    return model.feature_extractor, model.encoder_z, model.linear_classifier, final_logs
+    # return model.feature_extractor, model.encoder_z, model.linear_classifier, final_logs
+    return None, None, None, final_logs
 
 
 if __name__ == '__main__':
@@ -316,20 +312,6 @@ if __name__ == '__main__':
             'nuswide': 1.9,
             'cub': 31.4
         },
-        'linear_init_params': {  # best learning rate and batch size for linear_fixed_features phase of linear_init
-            'an_ls': {
-                'pascal': {'linear_init_lr': 1e-4, 'linear_init_bsize': 8},
-                'coco': {'linear_init_lr': 1e-4, 'linear_init_bsize': 8},
-                'nuswide': {'linear_init_lr': 1e-4, 'linear_init_bsize': 16},
-                'cub': {'linear_init_lr': 1e-4, 'linear_init_bsize': 8}
-            },
-            'role': {
-                'pascal': {'linear_init_lr': 1e-3, 'linear_init_bsize': 16},
-                'coco': {'linear_init_lr': 1e-3, 'linear_init_bsize': 16},
-                'nuswide': {'linear_init_lr': 1e-3, 'linear_init_bsize': 16},
-                'cub': {'linear_init_lr': 1e-3, 'linear_init_bsize': 8}
-            }
-        }
     }
 
     P = {}
@@ -343,15 +325,8 @@ if __name__ == '__main__':
     P['train_mode'] = 'end_to_end'  # linear_fixed_features, end_to_end, linear_init
     P['val_set_variant'] = 'clean'  # clean, observed
 
-    # Paths and filenames:
-    # P['experiment_name'] = 'multi_label_experiment'
-    # P['load_path'] = './data'
-    # P['save_path'] = './results'
 
     # Optimization parameters:
-    if P['train_mode'] == 'linear_init':
-        P['linear_init_lr'] = lookup['linear_init_params'][P['loss']][P['dataset']]['linear_init_lr']
-        P['linear_init_bsize'] = lookup['linear_init_params'][P['loss']][P['dataset']]['linear_init_bsize']
     P['lr_mult'] = 10.0  # learning rate multiplier for the parameters of g
     P['stop_metric'] = 'map'  # metric used to select the best epoch
 
@@ -375,7 +350,7 @@ if __name__ == '__main__':
     P['warmup_epoch'] = 3
     P['z_dim'] = 256
     if P['dataset'] == 'pascal':
-        P['bsize'] = 8
+        P['bsize'] = 2
         P['lr'] = 1e-5
         P['beta'] = 1e-4
         P['theta'] = 0.95
@@ -403,73 +378,20 @@ if __name__ == '__main__':
         P['train_set_variant'] = 'clean'
     else:
         P['train_set_variant'] = 'observed'
-    if P['train_mode'] == 'end_to_end':
-        P['num_epochs'] = 10
-        P['freeze_feature_extractor'] = False
-        P['use_feats'] = False
-        P['arch'] = 'resnet50'
-    elif P['train_mode'] == 'linear_init':
-        P['num_epochs'] = 25
-        P['freeze_feature_extractor'] = True
-        P['use_feats'] = True
-        P['arch'] = 'linear'
-    elif P['train_mode'] == 'linear_fixed_features':
-        P['num_epochs'] = 25
-        P['freeze_feature_extractor'] = True
-        P['use_feats'] = True
-        P['arch'] = 'linear'
-    else:
-        raise NotImplementedError('Unknown training mode.')
+
+    P['num_epochs'] = 10
+    P['freeze_feature_extractor'] = False
+    P['use_feats'] = False
+    P['arch'] = 'resnet50'
+
     P['feature_extractor_arch'] = 'resnet50'
     P['feat_dim'] = lookup['feat_dim'][P['feature_extractor_arch']]
     P['expected_num_pos'] = lookup['expected_num_pos'][P['dataset']]
     P['train_feats_file'] = './data/{}/train_features_imagenet_{}.npy'.format(P['dataset'], P['feature_extractor_arch'])
     P['val_feats_file'] = './data/{}/val_features_imagenet_{}.npy'.format(P['dataset'], P['feature_extractor_arch'])
 
-    # run training process:
-    best_params = None
-    best_lr = None
-    best_bsize = None
-    best_val_score = - np.Inf
-    best_test_score = None
-    now_str = datetime.datetime.now().strftime("%Y_%m_%d_%X").replace(':', '-')
-    if P['train_mode'] == 'linear_init':
-        gb_logger.info('training linear classifier with fixed hyperparameters:')
-        gb_logger.info('- linear_init_lr: {}'.format(P['linear_init_lr']))
-        gb_logger.info('- linear_init_bsize: {}'.format(P['linear_init_bsize']))
-        P['bsize'] = P['linear_init_bsize']
-        P['lr'] = P['linear_init_lr']
-        # P['save_path'] = './results/' + P['experiment_name'] + '_' + now_str + '_' + P['dataset']
-        # os.makedirs(P['save_path'], exist_ok=False)
-        P_temp = copy.deepcopy(P)  # re-set hyperparameter dict
-        (feature_extractor_init, encoder_z_init, linear_classifier_init, logs) = execute_training_run(P_temp,
-                                                                                                      feature_extractor=None,
-                                                                                                      encoder_z_init=None,
-                                                                                                      linear_classifier=None)
-        gb_logger.info('fine-tuning from trained linear classifier')
-    # bsize = 0
-    # lr = 0
-    now_str = datetime.datetime.now().strftime("%Y_%m_%d_%X").replace(':', '-')
-    # P['bsize'] = bsize
-    # P['lr'] = lr
-    # P['save_path'] = './results/' + P['experiment_name'] + '_' + now_str + '_' + P['dataset']
-    P_temp = copy.deepcopy(P)  # re-set hyperparameter dict
-    if P['train_mode'] == 'linear_init':
-        # P_temp['save_path'] = P['save_path'] + '_fine_tuned_from_linear'
-        # os.makedirs(P_temp['save_path'], exist_ok=False)
-        P_temp['train_mode'] = 'end_to_end'
-        P_temp['num_epochs'] = 10
-        P_temp['freeze_feature_extractor'] = False
-        P_temp['use_feats'] = False
-        P_temp['arch'] = 'resnet50'
-        (feature_extractor, encoder_z, linear_classifier, logs) = execute_training_run(P_temp,
-                                                                                       feature_extractor=feature_extractor_init,
-                                                                                       encoder_z_init=encoder_z_init,
-                                                                                       linear_classifier=linear_classifier_init)
-    else:
-        # os.makedirs(P['save_path'], exist_ok=False)
-        (feature_extractor, encoder_z, linear_classifier, logs) = execute_training_run(P_temp,
-                                                                                       feature_extractor=None,
-                                                                                       encoder_z_init=None,
-                                                                                       linear_classifier=None
-                                                                                       )
+    (feature_extractor, encoder_z, linear_classifier, logs) = execute_training_run(P,
+                                                                                   feature_extractor=None,
+                                                                                   encoder_z_init=None,
+                                                                                   linear_classifier=None
+                                                                                   )
