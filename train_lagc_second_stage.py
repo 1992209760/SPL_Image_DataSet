@@ -24,14 +24,13 @@ from lib_lagc.utils.helper import clean_state_dict, function_mAP, get_raw_dict, 
 from lib_lagc.utils.lacloss import LACLoss
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"
 
 def parser_args():
     parser = argparse.ArgumentParser(description='Second Training')
     
 
     # data
-    parser.add_argument('--dataset_name', help='dataset name', default='coco', choices=['voc', 'coco', 'nus', 'cub'])
+    parser.add_argument('--dataset_name', help='dataset name', default='coco', choices=['pascal', 'coco', 'nuswide', 'cub'])
     parser.add_argument('--dataset_dir', help='dir of dataset', default='./data')
     parser.add_argument('--img_size', default=448, type=int,
                         help='size of input images')
@@ -55,7 +54,7 @@ def parser_args():
     # train
     parser.add_argument('-j', '--workers', default=8, type=int, metavar='N',
                         help='number of data loading workers (default: 8)')
-    parser.add_argument('--epochs', default=40, type=int, metavar='N',
+    parser.add_argument('--epochs', default=10, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('--val_interval', default=1, type=int, metavar='N',
                         help='interval of validation')
@@ -97,7 +96,7 @@ def parser_args():
     parser.add_argument('--resume_omit', default=[], type=str, nargs='*')
     parser.add_argument('--ema_decay', default=0.9997, type=float, metavar='M',
                         help='decay of model ema')
-
+    parser.add_argument('--gpu', default=0, type=int, help='device')
 
     args = parser.parse_args()
 
@@ -136,7 +135,7 @@ def main():
     return main_worker(args, logger)
 
 def main_worker(args, logger):
-
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
     # build model
     model = build_LEModel(args)
     if args.is_data_parallel:
@@ -361,7 +360,7 @@ def train(train_loader, model, ema_m, optimizer, scheduler, criterion, epoch, ar
     model.train()
 
 
-    for i, ((inputs_w, inputs_s), targets) in enumerate(train_loader):
+    for i, ((inputs_w, inputs_s), targets, idx) in enumerate(train_loader):
 
         # **********************************************compute loss*************************************************************
 
@@ -454,7 +453,7 @@ def validate(val_loader, model, args, logger):
     targets_list = []
         
     end = time.time()
-    for i, (inputs, targets) in enumerate(val_loader):
+    for i, (inputs, targets, idx) in enumerate(val_loader):
         inputs = inputs.cuda(non_blocking=True)
         targets = targets.cuda(non_blocking=True)
 

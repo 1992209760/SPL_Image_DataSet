@@ -116,7 +116,7 @@ def run_train_phase(model, ema_m, P, Z, logger, epoch, phase):
             Z['optimizer'].zero_grad()
             loss.backward()
             Z['optimizer'].step()
-            ema_m.update(model)
+            ema_m.update(model.f)
 
     # for batch in Z['dataloaders'][phase]:
     #     # move data to GPU:
@@ -436,7 +436,7 @@ if __name__ == '__main__':
         P['train_set_variant'] = 'observed'
 
     # training parameters:
-    P['num_epochs'] = 1
+    P['num_epochs'] = 5
     P['freeze_feature_extractor'] = False
     P['use_feats'] = False
     P['arch'] = 'resnet50'
