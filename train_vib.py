@@ -9,12 +9,13 @@ from types import SimpleNamespace
 import numpy
 import numpy as np
 import torch
+from torch.optim import lr_scheduler
 
 from lib_lagc.models.LEModel import build_LEModel_VIB
 from utils import datasets, models
 from utils.losses import compute_batch_loss
 import datetime
-from utils.instrumentation import train_logger
+from utils.instrumentation import train_logger, get_cosine_schedule_with_warmup
 from utils.thelog import initLogger
 
 parser = argparse.ArgumentParser(description='CVPR-2021')
@@ -25,12 +26,15 @@ parser.add_argument('-l', '--loss', default='VIB',
 parser.add_argument('-t', '--theta', default=0.95, type=float)
 parser.add_argument('-b', '--beta', default=1e-4, type=float)
 parser.add_argument('-z', '--z_dim', default=256, type=int)
+parser.add_argument('-lr', default=1e-5, type=float)
+parser.add_argument('-wd', default=1e-4, type=float)
+parser.add_argument('-bs', default=16, type=int)
 
 args = parser.parse_args()
 
 # global logger
 sys.stdout = open(os.devnull, 'w')
-gb_logger, save_dir = initLogger(args, save_dir='results_LEM/')
+gb_logger, save_dir = initLogger(args, save_dir='param_vib_LEM_bs/')
 
 
 def run_train_phase(model, P, Z, logger, epoch, phase):
@@ -179,7 +183,7 @@ def train(model, P, Z):
                 # best_weights_feature_extractor = copy.deepcopy(model.feature_extractor.state_dict())
                 # best_weights_encoder_z = copy.deepcopy(model.encoder_z.state_dict())
                 # best_weights_linear_classifier = copy.deepcopy(model.linear_classifier.state_dict())
-
+        # Z['scheduler'].step()
     gb_logger.info('')
     gb_logger.info('*** TRAINING COMPLETE ***')
     gb_logger.info('Best epoch: {}'.format(logger.best_epoch))
@@ -263,15 +267,30 @@ def initialize_training_run(P, feature_extractor, linear_classifier, estimated_l
     args.feat_dim = P['z_dim']
     model = build_LEModel_VIB(args)
 
-    # optimization objects:
-    f_params = [param for param in list(model.parameters()) if param.requires_grad]
-    opt_params = [
-        {'params': f_params, 'lr': P['lr']},
+    # # optimization objects:
+    # f_params = [param for param in list(model.parameters()) if param.requires_grad]
+    # opt_params = [
+    #     {'params': f_params, 'lr': P['lr']},
+    # ]
+    # Z['optimizer'] = torch.optim.SGD(
+    #     opt_params,
+    #     lr=P['lr'],
+    #     weight_decay=P['wd'],
+    #     momentum=0.9
+    # )
+
+    param_dicts = [
+        {"params": [p for n, p in model.named_parameters() if p.requires_grad]},
     ]
-    Z['optimizer'] = torch.optim.Adam(
-        opt_params,
-        lr=P['lr']
+    Z['optimizer'] = getattr(torch.optim, 'AdamW')(
+        param_dicts,
+        P['lr'],
+        betas=(0.9, 0.999), eps=1e-08, weight_decay=P['wd']
     )
+    # Z['scheduler'] = lr_scheduler.OneCycleLR(Z['optimizer'], max_lr=P['lr'],
+    #                                          steps_per_epoch=len(Z['dataloaders']['train']),
+    #                                          epochs=P['num_epochs'], pct_start=0.2)
+    # Z['scheduler'] = get_cosine_schedule_with_warmup(Z['optimizer'], 3, 20)
 
     return P, Z, model
 
@@ -294,7 +313,6 @@ def execute_training_run(P, feature_extractor, encoder_z_init, linear_classifier
         model, P, Z)
 
     final_logs = logger.get_logs()
-
 
     # return model.feature_extractor, model.encoder_z, model.linear_classifier, final_logs
     return None, None, None, final_logs
@@ -325,7 +343,6 @@ if __name__ == '__main__':
     P['train_mode'] = 'end_to_end'  # linear_fixed_features, end_to_end, linear_init
     P['val_set_variant'] = 'clean'  # clean, observed
 
-
     # Optimization parameters:
     P['lr_mult'] = 10.0  # learning rate multiplier for the parameters of g
     P['stop_metric'] = 'map'  # metric used to select the best epoch
@@ -347,31 +364,43 @@ if __name__ == '__main__':
 
     # Optimization parameters:
     P['sample_times'] = 5
-    P['warmup_epoch'] = 3
+    P['warmup_epoch'] = 5
     P['z_dim'] = 256
     if P['dataset'] == 'pascal':
-        P['bsize'] = 2
+        P['bsize'] = 8
         P['lr'] = 1e-5
+        P['wd'] = 1e-2
         P['beta'] = 1e-4
-        P['theta'] = 0.95
+        P['theta'] = 0.8
+        P['z_dim'] = 512
     elif P['dataset'] == 'cub':
         P['bsize'] = 8
-        P['lr'] = 1e-4
+        P['lr'] = 1e-5
+        P['wd'] = 1e-5
+        P['warmup_epoch'] = 15
         P['beta'] = 1e-4
-        P['theta'] = 0.95
+        P['theta'] = 0.8
+        P['z_dim'] = 512
     elif P['dataset'] == 'nuswide':
         P['bsize'] = 16
         P['lr'] = 1e-5
+        P['wd'] = 1e-4
         P['beta'] = 1e-4
-        P['theta'] = 0.95
+        P['theta'] = 0.8
+        P['z_dim'] = 512
     elif P['dataset'] == 'coco':
         P['bsize'] = 16
         P['lr'] = 1e-5
-        P['beta'] = 1e-4
-        P['theta'] = 0.95
-    P['beta'] = args.beta
-    P['theta'] = args.theta
-    P['z_dim'] = args.z_dim
+        P['wd'] = 1e-4
+        P['beta'] = 1e-5
+        P['theta'] = 0.8
+        P['z_dim'] = 512
+    # P['lr'] = args.lr
+    # P['wd'] = args.wd
+    # P['beta'] = args.beta
+    # P['theta'] = args.theta
+    # P['z_dim'] = args.z_dim
+    P['bsize'] = args.bs
 
     # Dependent parameters:
     if P['loss'] in ['bce', 'bce_ls']:
@@ -379,7 +408,7 @@ if __name__ == '__main__':
     else:
         P['train_set_variant'] = 'observed'
 
-    P['num_epochs'] = 10
+    P['num_epochs'] = 20
     P['freeze_feature_extractor'] = False
     P['use_feats'] = False
     P['arch'] = 'resnet50'

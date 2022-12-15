@@ -329,7 +329,7 @@ if __name__ == '__main__':
         P['lr'] = 1e-5
     elif P['dataset'] == 'cub':
         P['bsize'] = 8
-        P['lr'] = 1e-4
+        P['lr'] = 1e-5
     elif P['dataset'] == 'nuswide':
         P['bsize'] = 16
         P['lr'] = 1e-5
