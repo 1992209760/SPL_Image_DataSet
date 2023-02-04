@@ -128,7 +128,7 @@ class LEModel(nn.Module):
 
 
 class LEModel_VIB(nn.Module):
-    def __init__(self, backbone, encoder, num_class, feat_dim):
+    def __init__(self, backbone, encoder, num_class, feat_dim, is_proj=True):
         """[summary]
 
         Args:
@@ -143,6 +143,7 @@ class LEModel_VIB(nn.Module):
         self.encoder = encoder
         self.num_class = num_class
         self.feat_dim = feat_dim
+        self.proj = is_proj
 
         hidden_dim = encoder.d_model
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
@@ -154,7 +155,7 @@ class LEModel_VIB(nn.Module):
             nn.Linear(hidden_dim, 2 * feat_dim)
         )
 
-    def forward(self, input):
+    def forward(self, input, is_train=True):
         # import ipdb; ipdb.set_trace()
         src, pos = self.backbone(input)
         src, pos = src[-1], pos[-1]
@@ -162,11 +163,17 @@ class LEModel_VIB(nn.Module):
         query_input = self.query_embed.weight
         hs = self.encoder(self.input_proj(src), query_input, pos)[0]  # B,K,d
         statistics = hs[-1]
-        statistics = self.proj(statistics)
-        z_mu = statistics[:, :, :self.feat_dim]
-        z_std = F.softplus(statistics[:, :, self.feat_dim:])
+        if self.proj:
+            statistics = self.proj(statistics)
+            z_mu = statistics[:, :, :self.feat_dim]
+            z_std = F.softplus(statistics[:, :, self.feat_dim:])
+        else:
+            z_dim = int(statistics.shape[2] / 2)
+            z_mu = statistics[:, :, :z_dim]
+            z_std = F.softplus(statistics[:, :, z_dim:])
         normal_sample_machine = torch.distributions.normal.Normal(z_mu, z_std)
-        z = normal_sample_machine.rsample()
+        # z = normal_sample_machine.rsample()
+        z = normal_sample_machine.rsample((10,)).mean(dim=0)
         out = self.fc(z)
 
         return out, z_mu, z_std
@@ -206,7 +213,7 @@ def build_LEModel(args):
     return model
 
 
-def build_LEModel_VIB(args):
+def build_LEModel_VIB(args, is_proj=True):
     args.num_class = NUM_CLASS[args.dataset_name]
     args.hidden_dim = NUM_CHANNEL[args.backbone]
 
@@ -218,6 +225,7 @@ def build_LEModel_VIB(args):
         encoder=encoder,
         num_class=args.num_class,
         feat_dim=args.feat_dim,
+        is_proj=is_proj,
     )
 
     model.input_proj = nn.Identity()

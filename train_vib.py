@@ -29,12 +29,13 @@ parser.add_argument('-z', '--z_dim', default=256, type=int)
 parser.add_argument('-lr', default=1e-5, type=float)
 parser.add_argument('-wd', default=1e-4, type=float)
 parser.add_argument('-bs', default=16, type=int)
+parser.add_argument('-T', default=1.0, type=float)
 
 args = parser.parse_args()
 
 # global logger
 sys.stdout = open(os.devnull, 'w')
-gb_logger, save_dir = initLogger(args, save_dir='param_vib_LEM_bs/')
+gb_logger, save_dir = initLogger(args, save_dir='param_vib_LEM_proj10_temp/')
 
 
 def run_train_phase(model, P, Z, logger, epoch, phase):
@@ -62,7 +63,7 @@ def run_train_phase(model, P, Z, logger, epoch, phase):
         with torch.set_grad_enabled(True):
             # batch['logits'], batch['label_vec_est'] = model(batch)
             batch['logits'], batch['mus'], batch['stds'] = model(batch['image'])
-            batch['preds'] = torch.sigmoid(batch['logits'])
+            batch['preds'] = torch.sigmoid(batch['logits'] / P['T'])
             if batch['preds'].dim() == 1:
                 batch['preds'] = torch.unsqueeze(batch['preds'], 0)
             batch['preds_np'] = batch['preds'].clone().detach().cpu().numpy()  # copy of preds for use in metrics
@@ -279,14 +280,33 @@ def initialize_training_run(P, feature_extractor, linear_classifier, estimated_l
     #     momentum=0.9
     # )
 
-    param_dicts = [
-        {"params": [p for n, p in model.named_parameters() if p.requires_grad]},
+    # param_dicts = [
+    #     {"params": [p for n, p in model.named_parameters() if p.requires_grad]},
+    # ]
+    # Z['optimizer'] = getattr(torch.optim, 'AdamW')(
+    #     param_dicts,
+    #     P['lr'],
+    #     betas=(0.9, 0.999), eps=1e-08, weight_decay=P['wd']
+    # )
+
+    f_params = [param for param in list(model.backbone.parameters()) if param.requires_grad]
+    g_params = [param for param in
+                # list(model.encoder.parameters()) +
+                # list(model.query_embed.parameters()) +
+                # list(model.fc.parameters()) +
+                list(model.proj.parameters())
+                if param.requires_grad]
+    opt_params = [
+        {'params': f_params, 'lr': P['lr']},
+        {'params': g_params, 'lr': 10 * P['lr']},
     ]
-    Z['optimizer'] = getattr(torch.optim, 'AdamW')(
-        param_dicts,
+
+    Z['optimizer'] = getattr(torch.optim, 'Adam')(
+        opt_params,
         P['lr'],
-        betas=(0.9, 0.999), eps=1e-08, weight_decay=P['wd']
+        # betas=(0.9, 0.999), eps=1e-08, weight_decay=P['wd']
     )
+
     # Z['scheduler'] = lr_scheduler.OneCycleLR(Z['optimizer'], max_lr=P['lr'],
     #                                          steps_per_epoch=len(Z['dataloaders']['train']),
     #                                          epochs=P['num_epochs'], pct_start=0.2)
@@ -373,6 +393,7 @@ if __name__ == '__main__':
         P['beta'] = 1e-4
         P['theta'] = 0.8
         P['z_dim'] = 512
+        P['warmup_epoch'] = 2
     elif P['dataset'] == 'cub':
         P['bsize'] = 8
         P['lr'] = 1e-5
@@ -400,7 +421,8 @@ if __name__ == '__main__':
     # P['beta'] = args.beta
     # P['theta'] = args.theta
     # P['z_dim'] = args.z_dim
-    P['bsize'] = args.bs
+    # P['bsize'] = args.bs
+    P['T'] = args.T
 
     # Dependent parameters:
     if P['loss'] in ['bce', 'bce_ls']:
