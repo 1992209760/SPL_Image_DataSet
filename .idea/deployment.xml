@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="liubiao@172.palm-seu.ml:50000 password" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="172server" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
-      <paths name="liubiao@172.palm-seu.ml:50000 password">
+      <paths name="172server">
         <serverdata>
           <mappings>
-            <mapping deploy="/ml_projects/spl_cvpr2021" local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="/ml_projects/spl_cvpr2021" local="$PROJECT_DIR$" />
           </mappings>
         </serverdata>
       </paths>
