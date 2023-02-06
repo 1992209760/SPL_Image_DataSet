@@ -193,6 +193,55 @@ class MultilabelModel_EM(torch.nn.Module):
         return f_logits
 
 
+class MultilabelModel_smile(torch.nn.Module):
+    def __init__(self, P, feature_extractor):
+        super(MultilabelModel_smile, self).__init__()
+        model_feature_extractor_in = copy.deepcopy(feature_extractor)
+
+        self.arch = P['arch']
+
+        if self.arch == 'resnet50':
+            # configure feature extractor:
+            if model_feature_extractor_in is not None:
+                feature_extractor = model_feature_extractor_in
+            else:
+                if P['use_pretrained']:
+                    feature_extractor = resnet50(pretrained=True)
+                else:
+                    feature_extractor = resnet50(pretrained=False)
+                feature_extractor = torch.nn.Sequential(*list(feature_extractor.children())[:-1])
+            if P['freeze_feature_extractor']:
+                for param in feature_extractor.parameters():
+                    param.requires_grad = False
+            else:
+                for param in feature_extractor.parameters():
+                    param.requires_grad = True
+            feature_extractor.avgpool = torch.nn.AdaptiveAvgPool2d(1)
+            self.feature_extractor = feature_extractor
+        self.z_dim = int(P['feat_dim'] / 2)
+        self.num_classes = int(P['num_classes'])
+        self.decoder_D = nn.Linear(self.z_dim, 2 * self.num_classes, bias=True)
+        self.linear_classifier = nn.Linear(self.z_dim, self.num_classes, bias=True)
+
+    def forward(self, x):
+        extracted_feat_statics = torch.squeeze(self.feature_extractor(x))
+        # encoder for z
+        z_mu = extracted_feat_statics[:, :self.z_dim]
+        z_std = F.softplus(extracted_feat_statics[:, self.z_dim:])
+        normal_sample_machine = torch.distributions.normal.Normal(z_mu, z_std)
+        z = normal_sample_machine.rsample()
+        # encoder for d
+        distribution_statics = self.decoder_D(z)
+        alpha = distribution_statics[:, :self.num_classes]
+        beta = distribution_statics[:, self.num_classes:]
+        alpha, beta = F.softplus(alpha), F.softplus(beta)
+        beta_sample_machine = torch.distributions.beta.Beta(alpha, beta)
+        d = beta_sample_machine.rsample()
+        # prediction
+        out = self.linear_classifier(z)
+        return out, d, z_mu, z_std, alpha, beta
+
+
 class MultilabelModel_LAGC(torch.nn.Module):
     def __init__(self, P, is_proj=False):
         super(MultilabelModel_LAGC, self).__init__()

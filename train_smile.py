@@ -4,6 +4,7 @@ import copy
 import sys
 import time
 import json
+import traceback
 from types import SimpleNamespace
 
 import numpy
@@ -13,18 +14,18 @@ from torch.optim import lr_scheduler
 
 from lib_lagc.models.LEModel import build_LEModel_VIB
 from utils import datasets, models
-from utils.losses import compute_batch_loss
+from utils.losses import compute_batch_loss, loss_smile
 import datetime
 from utils.instrumentation import train_logger, get_cosine_schedule_with_warmup
 from utils.thelog import initLogger
 
-parser = argparse.ArgumentParser(description='CVPR-2021')
+parser = argparse.ArgumentParser(description='SMILE')
 parser.add_argument('-g', '--gpu', default=0, type=int)
 parser.add_argument('-d', '--dataset', default='pascal', choices=['pascal', 'coco', 'nuswide', 'cub'], type=str)
-parser.add_argument('-l', '--loss', default='VIB',
-                    choices=['bce', 'bce_ls', 'iun', 'iu', 'pr', 'an', 'an_ls', 'wan', 'epr', 'role', 'VIB'], type=str)
-parser.add_argument('-t', '--theta', default=0.95, type=float)
+parser.add_argument('-l', '--loss', default='smile', type=str)
+parser.add_argument('-a', '--alpha', default=1, type=float)
 parser.add_argument('-b', '--beta', default=1e-4, type=float)
+parser.add_argument('-t', '--theta', default=1e-4, type=float)
 parser.add_argument('-z', '--z_dim', default=256, type=int)
 parser.add_argument('-lr', default=1e-5, type=float)
 parser.add_argument('-wd', default=1e-4, type=float)
@@ -35,7 +36,7 @@ args = parser.parse_args()
 
 # global logger
 sys.stdout = open(os.devnull, 'w')
-gb_logger, save_dir = initLogger(args, save_dir='param_vib_LEM_proj10_temp/')
+gb_logger, save_dir = initLogger(args, save_dir='param_smile/')
 
 
 def run_train_phase(model, P, Z, logger, epoch, phase):
@@ -62,12 +63,17 @@ def run_train_phase(model, P, Z, logger, epoch, phase):
         Z['optimizer'].zero_grad()
         with torch.set_grad_enabled(True):
             # batch['logits'], batch['label_vec_est'] = model(batch)
-            batch['logits'], batch['mus'], batch['stds'] = model(batch['image'])
+            batch['logits'], batch['distributions'],\
+                batch['mus'], batch['stds'],\
+                batch['alphas'], batch['betas'] = model(batch['image'])
             batch['preds'] = torch.sigmoid(batch['logits'] / P['T'])
             if batch['preds'].dim() == 1:
                 batch['preds'] = torch.unsqueeze(batch['preds'], 0)
             batch['preds_np'] = batch['preds'].clone().detach().cpu().numpy()  # copy of preds for use in metrics
-            batch = compute_batch_loss(batch, P, Z)
+            if epoch > P['warmup_epoch']:
+                batch = loss_smile(batch, P, Z)
+            else:
+                batch = loss_an(batch, P, Z)
         # backward pass:
         batch['loss_tensor'].backward()
         Z['optimizer'].step()
@@ -97,7 +103,7 @@ def run_eval_phase(model, P, Z, logger, epoch, phase):
         batch['label_vec_obs'] = batch['label_vec_obs'].to(Z['device'], non_blocking=True)
         # forward pass:
         with torch.set_grad_enabled(False):
-            batch['logits'], _, _ = model(batch['image'])
+            batch['logits'] = model(batch['image'])[0]
             batch['preds'] = torch.sigmoid(batch['logits'])
             if batch['preds'].dim() == 1:
                 batch['preds'] = torch.unsqueeze(batch['preds'], 0)
@@ -108,49 +114,14 @@ def run_eval_phase(model, P, Z, logger, epoch, phase):
         logger.update_phase_data(batch)
 
 
-def pseudo_labeling(model, P, Z, logger, epoch, phase):
-    assert phase == 'train'
-    model.eval()
-
-    total_preds = None
-    total_idx = None
-    P['steps_per_epoch'] = len(Z['dataloaders'][phase])
-
-    for i, batch in enumerate(Z['dataloaders'][phase]):
-
-        P['batch'] = i
-
-        # move data to GPU:
-        batch['image'] = batch['image'].to(Z['device'], non_blocking=True)
-
-        # forward pass:
-        with torch.set_grad_enabled(False):
-            batch['logits'], _, _ = model(batch['image'])
-            batch['preds'] = torch.sigmoid(batch['logits'])
-            if batch['preds'].dim() == 1:
-                batch['preds'] = torch.unsqueeze(batch['preds'], 0)
-
-        # gather:
-        if P['batch'] == 0:
-            total_preds = batch['preds'].detach().cpu().numpy()
-            total_idx = batch['idx'].cpu().numpy()
-        else:
-            total_preds = np.vstack((batch['preds'].detach().cpu().numpy(), total_preds))
-            total_idx = np.hstack((batch['idx'].cpu().numpy(), total_idx))
-    label_mtx = np.zeros_like(total_preds)
-    label_mtx[total_preds > P['theta']] = 1
-    Z['datasets']['train'].label_matrix_obs[total_idx] += label_mtx
-    Z['datasets']['train'].label_matrix_obs[Z['datasets']['train'].label_matrix_obs > 1] = 1
-
-
 def train(model, P, Z):
-    '''
+    """
     Train the model.
-    
+
     Parameters
     P: Dictionary of parameters, which completely specify the training procedure.
     Z: Dictionary of temporary objects used during training.
-    '''
+    """
 
     # best_weights_f = copy.deepcopy(model.feature_extractor.state_dict())
     logger = train_logger(P)  # initialize logger
@@ -166,8 +137,6 @@ def train(model, P, Z):
             t_init = time.time()
             if phase == 'train':
                 run_train_phase(model, P, Z, logger, epoch, phase)
-                if P['epoch'] >= P['warmup_epoch'] and P['loss'] == 'VIB':
-                    pseudo_labeling(model, P, Z, logger, P['epoch'], phase)
             else:
                 run_eval_phase(model, P, Z, logger, epoch, phase)
 
@@ -198,10 +167,10 @@ def train(model, P, Z):
         best_weights_linear_classifier = None
 
     # return P, model, logger, best_weights_feature_extractor, best_weights_encoder_z, best_weights_linear_classifier
-    return P, model, logger, None, None, None
+    return P, model, logger, None
 
 
-def initialize_training_run(P, feature_extractor, linear_classifier, estimated_labels):
+def initialize_training_run(P, feature_extractor, linear_classifier):
     '''
     Set up for model training.
     
@@ -260,62 +229,20 @@ def initialize_training_run(P, feature_extractor, linear_classifier, estimated_l
         )
 
     # model:
-    # model = models.MultilabelModel_VIB(P, feature_extractor)
-    args = SimpleNamespace()
-    args.dataset_name = P['dataset']
-    args.backbone = P['arch']
-    args.img_size = 448
-    args.feat_dim = P['z_dim']
-    model = build_LEModel_VIB(args)
+    model = models.MultilabelModel_smile(P, feature_extractor)
 
-    # # optimization objects:
-    # f_params = [param for param in list(model.parameters()) if param.requires_grad]
-    # opt_params = [
-    #     {'params': f_params, 'lr': P['lr']},
-    # ]
-    # Z['optimizer'] = torch.optim.SGD(
-    #     opt_params,
-    #     lr=P['lr'],
-    #     weight_decay=P['wd'],
-    #     momentum=0.9
-    # )
-
-    # param_dicts = [
-    #     {"params": [p for n, p in model.named_parameters() if p.requires_grad]},
-    # ]
-    # Z['optimizer'] = getattr(torch.optim, 'AdamW')(
-    #     param_dicts,
-    #     P['lr'],
-    #     betas=(0.9, 0.999), eps=1e-08, weight_decay=P['wd']
-    # )
-
-    f_params = [param for param in list(model.backbone.parameters()) if param.requires_grad]
-    g_params = [param for param in
-                # list(model.encoder.parameters()) +
-                # list(model.query_embed.parameters()) +
-                # list(model.fc.parameters()) +
-                list(model.proj.parameters())
-                if param.requires_grad]
-    opt_params = [
-        {'params': f_params, 'lr': P['lr']},
-        {'params': g_params, 'lr': 10 * P['lr']},
-    ]
-
-    Z['optimizer'] = getattr(torch.optim, 'Adam')(
-        opt_params,
-        P['lr'],
-        # betas=(0.9, 0.999), eps=1e-08, weight_decay=P['wd']
+    # optimization objects:
+    f_params = [param for param in list(model.parameters()) if param.requires_grad]
+    print(f_params)
+    Z['optimizer'] = torch.optim.Adam(
+        f_params,
+        lr=P['lr']
     )
-
-    # Z['scheduler'] = lr_scheduler.OneCycleLR(Z['optimizer'], max_lr=P['lr'],
-    #                                          steps_per_epoch=len(Z['dataloaders']['train']),
-    #                                          epochs=P['num_epochs'], pct_start=0.2)
-    # Z['scheduler'] = get_cosine_schedule_with_warmup(Z['optimizer'], 3, 20)
 
     return P, Z, model
 
 
-def execute_training_run(P, feature_extractor, encoder_z_init, linear_classifier):
+def execute_training_run(P, feature_extractor, linear_classifier):
     '''
     Initialize, run the training process, and save the results.
     
@@ -326,16 +253,15 @@ def execute_training_run(P, feature_extractor, encoder_z_init, linear_classifier
     estimated_labels: NumPy array containing estimated training set labels to start from (for ROLE).
     '''
 
-    P, Z, model = initialize_training_run(P, feature_extractor, encoder_z_init, linear_classifier)
+    P, Z, model = initialize_training_run(P, feature_extractor, linear_classifier)
     model.to(Z['device'])
 
-    P, model, logger, best_weights_feature_extractor, best_weights_encoder_z, best_weights_linear_classifier = train(
-        model, P, Z)
+    P, model, logger, best_weights_f = train(model, P, Z)
 
     final_logs = logger.get_logs()
 
     # return model.feature_extractor, model.encoder_z, model.linear_classifier, final_logs
-    return None, None, None, final_logs
+    return None, None, final_logs
 
 
 if __name__ == '__main__':
@@ -385,10 +311,10 @@ if __name__ == '__main__':
     # Optimization parameters:
     P['sample_times'] = 5
     P['warmup_epoch'] = 5
-    P['z_dim'] = 256
+    # P['z_dim'] = 256
     if P['dataset'] == 'pascal':
         P['bsize'] = 8
-        P['lr'] = 1e-5
+        P['lr'] = 1e-3
         P['wd'] = 1e-2
         P['beta'] = 1e-4
         P['theta'] = 0.8
@@ -418,8 +344,9 @@ if __name__ == '__main__':
         P['z_dim'] = 512
     # P['lr'] = args.lr
     # P['wd'] = args.wd
-    # P['beta'] = args.beta
-    # P['theta'] = args.theta
+    P['alpha'] = args.alpha
+    P['beta'] = args.beta
+    P['theta'] = args.theta
     # P['z_dim'] = args.z_dim
     # P['bsize'] = args.bs
     P['T'] = args.T
@@ -441,8 +368,13 @@ if __name__ == '__main__':
     P['train_feats_file'] = './data/{}/train_features_imagenet_{}.npy'.format(P['dataset'], P['feature_extractor_arch'])
     P['val_feats_file'] = './data/{}/val_features_imagenet_{}.npy'.format(P['dataset'], P['feature_extractor_arch'])
 
-    (feature_extractor, encoder_z, linear_classifier, logs) = execute_training_run(P,
-                                                                                   feature_extractor=None,
-                                                                                   encoder_z_init=None,
-                                                                                   linear_classifier=None
-                                                                                   )
+    # (feature_extractor, encoder_z, linear_classifier, logs) = execute_training_run(P,
+    #                                                                                feature_extractor=None,
+    #                                                                                encoder_z_init=None,
+    #                                                                                linear_classifier=None
+    #                                                                                )
+    try:
+        (feature_extractor, linear_classifier, logs) = execute_training_run(P, feature_extractor=None, linear_classifier=None)
+    except Exception as e:
+        gb_logger.error("Error : " + str(e))
+        gb_logger.error('traceback.format_exc():\n%s' % traceback.format_exc())

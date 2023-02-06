@@ -265,6 +265,42 @@ def loss_VIB(batch, P, Z):
     return loss_mtx, reg_loss
 
 
+def loss_smile(batch, P, Z):
+    preds = batch['preds']
+    observed_labels = batch['label_vec_obs']
+    z_mu = batch['mus']
+    z_std = batch['stds']
+    distributions = batch['distributions']
+    d_alpha = batch['alphas']
+    d_beta = batch['betas']
+    # input validation:
+    assert torch.min(observed_labels) >= 0
+    # compute loss:
+    loss_mtx_D = torch.zeros_like(observed_labels)
+    # loss_mtx[observed_labels == 1] = neg_log(preds[observed_labels == 1])
+    # loss_mtx[observed_labels == 0] = neg_log(1.0 - preds[observed_labels == 0])
+    loss_mtx_D[observed_labels == 1] = neg_log(distributions[observed_labels == 1])
+    loss_mtx_D[observed_labels == 0] = neg_log(1.0 - distributions[observed_labels == 0])
+    loss_D = loss_mtx_D.mean()
+    reg_z = -0.5 * (1 + 2 * z_std.log() - z_mu.pow(2) - z_std.pow(2)).mean()
+    prior_alpha, prior_beta = torch.ones_like(d_alpha), torch.ones_like(d_alpha)
+    reg_d = (torch.lgamma(d_alpha + d_beta) + torch.lgamma(prior_alpha) + torch.lgamma(prior_beta)
+             - (torch.lgamma(prior_alpha + prior_beta) + torch.lgamma(d_alpha) + torch.lgamma(d_beta))
+             + (d_alpha - prior_alpha) * torch.digamma(d_alpha)
+             + (d_beta - prior_beta) * torch.digamma(d_beta)
+             - (d_alpha - prior_alpha + d_beta - prior_beta) * torch.digamma(d_alpha + d_beta)).mean()
+    loss_mtx_align = distributions * neg_log(preds) + (1 - distributions) * neg_log(1 - preds)
+    loss_mtx_align[observed_labels == 0] = loss_mtx_align[observed_labels == 0] * 0.5
+    # loss_align = (preds * neg_log(distributions) + (1 - preds) * neg_log(1 - distributions)).mean()
+    loss_align = loss_mtx_align.mean()
+    batch['loss_tensor'] = \
+        1 * loss_align + \
+        P['alpha'] * loss_D + P['beta'] * reg_z + P['theta'] * reg_d
+    batch['loss_np'] = batch['loss_tensor'].clone().detach().cpu().numpy()
+    batch['reg_loss_np'] = 0.0
+    return batch
+
+
 loss_functions = {
     'bce': loss_bce,
     'bce_ls': loss_bce_ls,
@@ -278,7 +314,8 @@ loss_functions = {
     'role': loss_role,
     'EM': loss_EM,
     'EM_APL': loss_EM_APL,
-    'VIB': loss_VIB
+    'VIB': loss_VIB,
+    'smile': loss_smile
 }
 
 '''
