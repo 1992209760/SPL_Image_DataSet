@@ -14,7 +14,7 @@ from torch.optim import lr_scheduler
 
 from lib_lagc.models.LEModel import build_LEModel_VIB
 from utils import datasets, models
-from utils.losses import compute_batch_loss, loss_smile
+from utils.losses import compute_batch_loss, loss_smile, loss_warm
 import datetime
 from utils.instrumentation import train_logger, get_cosine_schedule_with_warmup
 from utils.thelog import initLogger
@@ -36,7 +36,7 @@ args = parser.parse_args()
 
 # global logger
 sys.stdout = open(os.devnull, 'w')
-gb_logger, save_dir = initLogger(args, save_dir='param_smile/')
+gb_logger, save_dir = initLogger(args, save_dir='param_smile_sgd/')
 
 
 def run_train_phase(model, P, Z, logger, epoch, phase):
@@ -63,8 +63,8 @@ def run_train_phase(model, P, Z, logger, epoch, phase):
         Z['optimizer'].zero_grad()
         with torch.set_grad_enabled(True):
             # batch['logits'], batch['label_vec_est'] = model(batch)
-            batch['logits'], batch['distributions'],\
-                batch['mus'], batch['stds'],\
+            batch['logits'], batch['distributions'], \
+                batch['mus'], batch['stds'], \
                 batch['alphas'], batch['betas'] = model(batch['image'])
             batch['preds'] = torch.sigmoid(batch['logits'] / P['T'])
             if batch['preds'].dim() == 1:
@@ -72,10 +72,12 @@ def run_train_phase(model, P, Z, logger, epoch, phase):
             batch['preds_np'] = batch['preds'].clone().detach().cpu().numpy()  # copy of preds for use in metrics
             if epoch > P['warmup_epoch']:
                 batch = loss_smile(batch, P, Z)
+                batch['loss_tensor'].backward()
             else:
-                batch = loss_an(batch, P, Z)
+                batch = loss_warm(batch, P, Z)
+                batch['loss_tensor'].backward(retain_graph=True)
+                batch['loss_tensor_D'].backward()
         # backward pass:
-        batch['loss_tensor'].backward()
         Z['optimizer'].step()
         # save current batch data:
         logger.update_phase_data(batch)
@@ -234,9 +236,15 @@ def initialize_training_run(P, feature_extractor, linear_classifier):
     # optimization objects:
     f_params = [param for param in list(model.parameters()) if param.requires_grad]
     print(f_params)
-    Z['optimizer'] = torch.optim.Adam(
+    # Z['optimizer'] = torch.optim.Adam(
+    #     f_params,
+    #     lr=P['lr']
+    # )
+    Z['optimizer'] = torch.optim.SGD(
         f_params,
-        lr=P['lr']
+        lr=P['lr'],
+        weight_decay=P['wd'],
+        momentum=0.9
     )
 
     return P, Z, model
@@ -314,7 +322,7 @@ if __name__ == '__main__':
     # P['z_dim'] = 256
     if P['dataset'] == 'pascal':
         P['bsize'] = 8
-        P['lr'] = 1e-3
+        P['lr'] = 1e-5
         P['wd'] = 1e-2
         P['beta'] = 1e-4
         P['theta'] = 0.8
@@ -342,8 +350,8 @@ if __name__ == '__main__':
         P['beta'] = 1e-5
         P['theta'] = 0.8
         P['z_dim'] = 512
-    # P['lr'] = args.lr
-    # P['wd'] = args.wd
+    P['lr'] = args.lr
+    P['wd'] = args.wd
     P['alpha'] = args.alpha
     P['beta'] = args.beta
     P['theta'] = args.theta
@@ -357,7 +365,7 @@ if __name__ == '__main__':
     else:
         P['train_set_variant'] = 'observed'
 
-    P['num_epochs'] = 20
+    P['num_epochs'] = 40
     P['freeze_feature_extractor'] = False
     P['use_feats'] = False
     P['arch'] = 'resnet50'
