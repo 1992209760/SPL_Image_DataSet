@@ -236,7 +236,8 @@ def initialize_training_run(P, feature_extractor, linear_classifier):
     # optimization objects:
     f_params = [param for param in list(model.feature_extractor.parameters()) if param.requires_grad]
     g_params = [param for param in list(model.decoder_D.parameters()) +
-                                   list(model.linear_classifier.parameters()) if param.requires_grad]
+                                   list(model.linear_classifier.parameters()) +
+                                   list(model.proj.parameters()) if param.requires_grad]
     # print(f_params)
     opt_params = [
         {'params': f_params, 'lr': P['lr']},

@@ -218,16 +218,24 @@ class MultilabelModel_smile(torch.nn.Module):
                     param.requires_grad = True
             feature_extractor.avgpool = torch.nn.AdaptiveAvgPool2d(1)
             self.feature_extractor = feature_extractor
-        self.z_dim = int(P['feat_dim'] / 2)
+        self.feat_dim = P['feat_dim']
         self.num_classes = int(P['num_classes'])
+        self.z_dim = P['z_dim']
+        self.proj = nn.Sequential(
+            nn.Linear(self.feat_dim, int(self.feat_dim / 2)),
+            nn.ReLU(inplace=True),
+            nn.Linear(int(self.feat_dim / 2), 2 * self.z_dim)
+        )
         self.decoder_D = nn.Linear(self.z_dim, 2 * self.num_classes, bias=True)
         self.linear_classifier = nn.Linear(self.z_dim, self.num_classes, bias=True)
 
     def forward(self, x):
         extracted_feat_statics = torch.squeeze(self.feature_extractor(x))
         # encoder for z
+        extracted_feat_statics = self.proj(extracted_feat_statics)
         z_mu = extracted_feat_statics[:, :self.z_dim]
         z_std = F.softplus(extracted_feat_statics[:, self.z_dim:])
+        # z_std = torch.exp(extracted_feat_statics[:, self.z_dim:] / 2)
         normal_sample_machine = torch.distributions.normal.Normal(z_mu, z_std)
         z = normal_sample_machine.rsample()
         # encoder for d
@@ -235,6 +243,7 @@ class MultilabelModel_smile(torch.nn.Module):
         alpha = distribution_statics[:, :self.num_classes]
         beta = distribution_statics[:, self.num_classes:]
         alpha, beta = F.softplus(alpha), F.softplus(beta)
+        # alpha, beta = F.relu(alpha) + 1e-6, F.relu(beta) + 1e-6
         beta_sample_machine = torch.distributions.beta.Beta(alpha, beta)
         d = beta_sample_machine.rsample()
         # prediction
