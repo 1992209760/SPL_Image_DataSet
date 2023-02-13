@@ -301,6 +301,10 @@ def loss_smile(batch, P, Z):
     loss_mtx_D[observed_labels == 1] = neg_log(distributions[observed_labels == 1])
     loss_mtx_D[observed_labels == 0] = neg_log(1.0 - distributions[observed_labels == 0])
     loss_D = loss_mtx_D.mean()
+    loss_mtx_pred = torch.zeros_like(observed_labels)
+    loss_mtx_pred[observed_labels == 1] = neg_log(preds[observed_labels == 1])
+    loss_mtx_pred[observed_labels == 0] = neg_log(1.0 - preds[observed_labels == 0])
+    loss_pred = loss_mtx_pred.mean()
     reg_z = -0.5 * (1 + 2 * z_std.log() - z_mu.pow(2) - z_std.pow(2)).mean()
     prior_alpha, prior_beta = torch.ones_like(d_alpha), torch.ones_like(d_alpha)
     reg_d = (torch.lgamma(d_alpha + d_beta) + torch.lgamma(prior_alpha) + torch.lgamma(prior_beta)
@@ -313,8 +317,10 @@ def loss_smile(batch, P, Z):
     loss_align = loss_mtx_align.mean()
     # loss_align = (preds * neg_log(distributions) + (1 - preds) * neg_log(1 - distributions)).mean()
     batch['loss_tensor'] = \
-        1 * loss_align + \
-        P['alpha'] * loss_D + P['beta'] * reg_z + P['theta'] * reg_d
+        P['theta'] * loss_align + \
+        P['alpha'] * loss_pred + \
+        P['beta'] * loss_D + \
+        1e-5 * reg_z + 1e-5 * reg_d
     batch['loss_np'] = batch['loss_tensor'].clone().detach().cpu().numpy()
     batch['reg_loss_np'] = 0.0
     return batch

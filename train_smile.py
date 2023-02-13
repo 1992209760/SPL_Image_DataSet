@@ -36,7 +36,7 @@ args = parser.parse_args()
 
 # global logger
 sys.stdout = open(os.devnull, 'w')
-gb_logger, save_dir = initLogger(args, save_dir='param_smile_sgd/')
+gb_logger, save_dir = initLogger(args, save_dir='param_smile_adam_pred_an_multilr/')
 
 
 def run_train_phase(model, P, Z, logger, epoch, phase):
@@ -234,18 +234,24 @@ def initialize_training_run(P, feature_extractor, linear_classifier):
     model = models.MultilabelModel_smile(P, feature_extractor)
 
     # optimization objects:
-    f_params = [param for param in list(model.parameters()) if param.requires_grad]
-    print(f_params)
-    # Z['optimizer'] = torch.optim.Adam(
-    #     f_params,
-    #     lr=P['lr']
-    # )
-    Z['optimizer'] = torch.optim.SGD(
-        f_params,
-        lr=P['lr'],
-        weight_decay=P['wd'],
-        momentum=0.9
+    f_params = [param for param in list(model.feature_extractor.parameters()) if param.requires_grad]
+    g_params = [param for param in list(model.decoder_D.parameters()) +
+                                   list(model.linear_classifier.parameters()) if param.requires_grad]
+    # print(f_params)
+    opt_params = [
+        {'params': f_params, 'lr': P['lr']},
+        {'params': g_params, 'lr': 10 * P['lr']}
+    ]
+    Z['optimizer'] = torch.optim.Adam(
+        opt_params,
+        lr=P['lr']
     )
+    # Z['optimizer'] = torch.optim.SGD(
+    #     f_params,
+    #     lr=P['lr'],
+    #     weight_decay=P['wd'],
+    #     momentum=0.9
+    # )
 
     return P, Z, model
 
@@ -350,8 +356,8 @@ if __name__ == '__main__':
         P['beta'] = 1e-5
         P['theta'] = 0.8
         P['z_dim'] = 512
-    P['lr'] = args.lr
-    P['wd'] = args.wd
+    # P['lr'] = args.lr
+    # P['wd'] = args.wd
     P['alpha'] = args.alpha
     P['beta'] = args.beta
     P['theta'] = args.theta
