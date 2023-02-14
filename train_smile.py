@@ -36,7 +36,7 @@ args = parser.parse_args()
 
 # global logger
 sys.stdout = open(os.devnull, 'w')
-gb_logger, save_dir = initLogger(args, save_dir='param_smile_adam_pred_an_multilr/')
+gb_logger, save_dir = initLogger(args, save_dir='param_smile_adam_proj/')
 
 
 def run_train_phase(model, P, Z, logger, epoch, phase):
@@ -362,7 +362,7 @@ if __name__ == '__main__':
     P['alpha'] = args.alpha
     P['beta'] = args.beta
     P['theta'] = args.theta
-    # P['z_dim'] = args.z_dim
+    P['z_dim'] = args.z_dim
     # P['bsize'] = args.bs
     P['T'] = args.T
 
@@ -372,7 +372,7 @@ if __name__ == '__main__':
     else:
         P['train_set_variant'] = 'observed'
 
-    P['num_epochs'] = 40
+    P['num_epochs'] = 20
     P['freeze_feature_extractor'] = False
     P['use_feats'] = False
     P['arch'] = 'resnet50'

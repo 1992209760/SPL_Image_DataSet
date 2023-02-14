@@ -222,9 +222,9 @@ class MultilabelModel_smile(torch.nn.Module):
         self.num_classes = int(P['num_classes'])
         self.z_dim = P['z_dim']
         self.proj = nn.Sequential(
-            nn.Linear(self.feat_dim, int(self.feat_dim / 2)),
+            nn.Linear(self.feat_dim, self.feat_dim),
             nn.ReLU(inplace=True),
-            nn.Linear(int(self.feat_dim / 2), 2 * self.z_dim)
+            nn.Linear(self.feat_dim, 2 * self.z_dim)
         )
         self.decoder_D = nn.Linear(self.z_dim, 2 * self.num_classes, bias=True)
         self.linear_classifier = nn.Linear(self.z_dim, self.num_classes, bias=True)
