@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from torch.optim import lr_scheduler
 
-from lib_lagc.models.LEModel import build_LEModel_VIB
+from lib_lagc.models.LEModel import build_LEModel_VIB, build_LEModel_smile
 from utils import datasets, models
 from utils.losses import compute_batch_loss, loss_smile, loss_warm
 import datetime
@@ -36,7 +36,7 @@ args = parser.parse_args()
 
 # global logger
 sys.stdout = open(os.devnull, 'w')
-gb_logger, save_dir = initLogger(args, save_dir='param_smile_adam_proj_anls/')
+gb_logger, save_dir = initLogger(args, save_dir='param_smile_adam_LEM/')
 
 
 def run_train_phase(model, P, Z, logger, epoch, phase):
@@ -230,18 +230,40 @@ def initialize_training_run(P, feature_extractor, linear_classifier):
             drop_last=True
         )
 
-    # model:
-    model = models.MultilabelModel_smile(P, feature_extractor)
+    # # model:
+    # model = models.MultilabelModel_smile(P, feature_extractor)
+    #
+    # # optimization objects:
+    # f_params = [param for param in list(model.feature_extractor.parameters()) if param.requires_grad]
+    # g_params = [param for param in list(model.decoder_D.parameters()) +
+    #                                list(model.linear_classifier.parameters()) +
+    #                                list(model.proj.parameters()) if param.requires_grad]
+    # # print(f_params)
+    # opt_params = [
+    #     {'params': f_params, 'lr': P['lr']},
+    #     {'params': g_params, 'lr': 10 * P['lr']}
+    # ]
 
+    args = SimpleNamespace()
+    args.dataset_name = P['dataset']
+    args.backbone = P['arch']
+    args.img_size = 448
+    args.feat_dim = P['z_dim']
+    model = build_LEModel_smile(args)
     # optimization objects:
-    f_params = [param for param in list(model.feature_extractor.parameters()) if param.requires_grad]
-    g_params = [param for param in list(model.decoder_D.parameters()) +
-                                   list(model.linear_classifier.parameters()) +
-                                   list(model.proj.parameters()) if param.requires_grad]
-    # print(f_params)
+    # f_params = [param for param in list(model.parameters()) if param.requires_grad]
+    f_params = [param for param in list(model.backbone.parameters()) if param.requires_grad]
+    g_params = [param for param in
+                list(model.encoder.parameters()) +
+                list(model.query_embed.parameters()) +
+                list(model.fc.parameters()) +
+                list(model.proj.parameters()) +
+                list(model.d_encoder_alpha.parameters()) +
+                list(model.d_encoder_beta.parameters())
+                if param.requires_grad]
     opt_params = [
         {'params': f_params, 'lr': P['lr']},
-        {'params': g_params, 'lr': 10 * P['lr']}
+        {'params': g_params, 'lr': P['lr']},
     ]
     Z['optimizer'] = torch.optim.Adam(
         opt_params,
@@ -372,7 +394,7 @@ if __name__ == '__main__':
     else:
         P['train_set_variant'] = 'observed'
 
-    P['num_epochs'] = 20
+    P['num_epochs'] = 10
     P['freeze_feature_extractor'] = False
     P['use_feats'] = False
     P['arch'] = 'resnet50'

@@ -298,20 +298,20 @@ def loss_smile(batch, P, Z):
     loss_mtx_D = torch.zeros_like(observed_labels)
     # loss_mtx[observed_labels == 1] = neg_log(preds[observed_labels == 1])
     # loss_mtx[observed_labels == 0] = neg_log(1.0 - preds[observed_labels == 0])
-    # loss_mtx_D[observed_labels == 1] = neg_log(distributions[observed_labels == 1])
-    # loss_mtx_D[observed_labels == 0] = neg_log(1.0 - distributions[observed_labels == 0])
-    loss_mtx_D[observed_labels == 1] = (1 - 0.1) * neg_log(distributions[observed_labels == 1]) + \
-                                       0.1 * neg_log(1.0 - distributions[observed_labels == 1])
-    loss_mtx_D[observed_labels == 0] = (1 - 0.1) * neg_log(1.0 - distributions[observed_labels == 0]) + \
-                                       0.1 * neg_log(distributions[observed_labels == 0])
+    loss_mtx_D[observed_labels == 1] = neg_log(distributions[observed_labels == 1])
+    loss_mtx_D[observed_labels == 0] = neg_log(1.0 - distributions[observed_labels == 0])
+    # loss_mtx_D[observed_labels == 1] = (1 - 0.1) * neg_log(distributions[observed_labels == 1]) + \
+    #                                    0.1 * neg_log(1.0 - distributions[observed_labels == 1])
+    # loss_mtx_D[observed_labels == 0] = (1 - 0.1) * neg_log(1.0 - distributions[observed_labels == 0]) + \
+    #                                    0.1 * neg_log(distributions[observed_labels == 0])
     loss_D = loss_mtx_D.mean()
     loss_mtx_pred = torch.zeros_like(observed_labels)
-    # loss_mtx_pred[observed_labels == 1] = neg_log(preds[observed_labels == 1])
-    # loss_mtx_pred[observed_labels == 0] = neg_log(1.0 - preds[observed_labels == 0])
-    loss_mtx_pred[observed_labels == 1] = (1 - 0.1) * neg_log(preds[observed_labels == 1]) + \
-                                          0.1 * neg_log(1.0 - preds[observed_labels == 1])
-    loss_mtx_pred[observed_labels == 0] = (1 - 0.1) * neg_log(1.0 - preds[observed_labels == 0]) + \
-                                          0.1 * neg_log(preds[observed_labels == 0])
+    loss_mtx_pred[observed_labels == 1] = neg_log(preds[observed_labels == 1])
+    loss_mtx_pred[observed_labels == 0] = neg_log(1.0 - preds[observed_labels == 0])
+    # loss_mtx_pred[observed_labels == 1] = (1 - 0.1) * neg_log(preds[observed_labels == 1]) + \
+    #                                       0.1 * neg_log(1.0 - preds[observed_labels == 1])
+    # loss_mtx_pred[observed_labels == 0] = (1 - 0.1) * neg_log(1.0 - preds[observed_labels == 0]) + \
+    #                                       0.1 * neg_log(preds[observed_labels == 0])
     loss_pred = loss_mtx_pred.mean()
     reg_z = -0.5 * (1 + 2 * z_std.log() - z_mu.pow(2) - z_std.pow(2)).mean()
     prior_alpha, prior_beta = torch.ones_like(d_alpha), torch.ones_like(d_alpha)
