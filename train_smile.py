@@ -36,7 +36,7 @@ args = parser.parse_args()
 
 # global logger
 sys.stdout = open(os.devnull, 'w')
-gb_logger, save_dir = initLogger(args, save_dir='param_smile_adam_proj/')
+gb_logger, save_dir = initLogger(args, save_dir='param_smile_adam_proj_anls/')
 
 
 def run_train_phase(model, P, Z, logger, epoch, phase):
