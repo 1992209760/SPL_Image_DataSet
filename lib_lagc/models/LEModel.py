@@ -213,9 +213,9 @@ class LEModel_smile(nn.Module):
         hidden_dim = encoder.d_model
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.query_embed = nn.Embedding(num_class, hidden_dim)
-        self.d_encoder_alpha = GroupWiseLinear(num_class, feat_dim, bias=True)
-        self.d_encoder_beta = GroupWiseLinear(num_class, feat_dim, bias=True)
-        self.fc = GroupWiseLinear(num_class, feat_dim, bias=True)
+        self.d_encoder_alpha = GroupWiseLinear(num_class, hidden_dim, bias=True)
+        self.d_encoder_beta = GroupWiseLinear(num_class, hidden_dim, bias=True)
+        self.fc = GroupWiseLinear(num_class, hidden_dim, bias=True)
         self.proj = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(inplace=True),
@@ -229,25 +229,22 @@ class LEModel_smile(nn.Module):
 
         query_input = self.query_embed.weight
         hs = self.encoder(self.input_proj(src), query_input, pos)[0]  # B,K,d
-        statistics = hs[-1]
-        if self.proj:
-            statistics = self.proj(statistics)
-            z_mu = statistics[:, :, :self.feat_dim]
-            z_std = F.softplus(statistics[:, :, self.feat_dim:])
-        else:
-            z_dim = int(statistics.shape[2] / 2)
-            z_mu = statistics[:, :, :z_dim]
-            z_std = F.softplus(statistics[:, :, z_dim:])
-        normal_sample_machine = torch.distributions.normal.Normal(z_mu, z_std)
-        z = normal_sample_machine.rsample()
+        features, statistics = hs[-1], hs[-1]
+
+        statistics = self.proj(statistics)
+        z_mu = statistics[:, :, :self.feat_dim]
+        z_std = F.softplus(statistics[:, :, self.feat_dim:])
+
+        # normal_sample_machine = torch.distributions.normal.Normal(z_mu, z_std)
+        # z = normal_sample_machine.rsample()
         # z = normal_sample_machine.rsample((10,)).mean(dim=0)
-        out = self.fc(z)
+        out = self.fc(features)
 
         # distribution_statics = self.d_encoder(z)
         # alpha = distribution_statics[:, :self.num_classes]
         # beta = distribution_statics[:, self.num_classes:]
-        alpha = self.d_encoder_alpha(z)
-        beta = self.d_encoder_beta(z)
+        alpha = self.d_encoder_alpha(features)
+        beta = self.d_encoder_beta(features)
         alpha, beta = F.softplus(alpha), F.softplus(beta)
         # alpha, beta = F.relu(alpha) + 1e-6, F.relu(beta) + 1e-6
         beta_sample_machine = torch.distributions.beta.Beta(alpha, beta)

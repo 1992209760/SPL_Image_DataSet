@@ -13,6 +13,7 @@ import torch
 from torch.optim import lr_scheduler
 
 from lib_lagc.models.LEModel import build_LEModel_VIB, build_LEModel_smile
+from lib_lagc.utils.lacloss import LACLoss
 from utils import datasets, models
 from utils.losses import compute_batch_loss, loss_smile, loss_warm
 import datetime
@@ -27,6 +28,7 @@ parser.add_argument('-a', '--alpha', default=1, type=float)
 parser.add_argument('-b', '--beta', default=1e-4, type=float)
 parser.add_argument('-t', '--theta', default=1e-4, type=float)
 parser.add_argument('-z', '--z_dim', default=256, type=int)
+parser.add_argument('-lac', '--lambda_lac', default=1, type=float)
 parser.add_argument('-lr', default=1e-5, type=float)
 parser.add_argument('-wd', default=1e-4, type=float)
 parser.add_argument('-bs', default=16, type=int)
@@ -51,7 +53,7 @@ def run_train_phase(model, P, Z, logger, epoch, phase):
     epoch: Integer index of the current epoch.
     phase: String giving the phase name
     '''
-
+    criterion = LACLoss(temperature=1).cuda()
     assert phase == 'train'
     model.train()
     for batch in Z['dataloaders'][phase]:
@@ -71,7 +73,38 @@ def run_train_phase(model, P, Z, logger, epoch, phase):
                 batch['preds'] = torch.unsqueeze(batch['preds'], 0)
             batch['preds_np'] = batch['preds'].clone().detach().cpu().numpy()  # copy of preds for use in metrics
             if epoch > P['warmup_epoch']:
+                # contrastive loss
+                pseudo_label = torch.sigmoid(batch['logits'].detach()) + batch['label_vec_obs']
+                # pseudo_label_mask = ((pseudo_label >= 0.9) | (pseudo_label < (1 - 0.9))).float()
+                # pseudo_label_hard = (pseudo_label >= 0.9).float()
+                normal_sample_machine = torch.distributions.normal.Normal(batch['mus'], batch['stds'])
+                feats_w = normal_sample_machine.rsample((1,)).mean(dim=0)
+                feats_s = normal_sample_machine.rsample((1,)).mean(dim=0)
+                feats_w = torch.cat(torch.unbind(feats_w, dim=0), dim=0)
+                feats_s = torch.cat(torch.unbind(feats_s, dim=0), dim=0)
+                feats = torch.stack([feats_w, feats_s], dim=1)
+
+                pseudo_label_hard = (pseudo_label >= 0.9).float()
+                sequence_code = torch.arange(start=1, end=(P['num_classes'] + 1), step=1).repeat(
+                    batch['label_vec_obs'].shape[0], 1).cuda()
+                labels = sequence_code * (pseudo_label_hard.bool() | batch['label_vec_obs'].bool())
+                labels = torch.cat(torch.unbind(labels, dim=0), dim=0)
+                # filter positive samples whose labels are not 0 (now, labels are numbered from 1 to num_class)
+                positive_pos = (labels != 0).nonzero().squeeze()
+                labels = labels[positive_pos]
+                feats = feats[positive_pos]
+                # *************************compute Lc and update MQ*************************
+                P['queue_feats'].detach_()
+                P['queue_labels'].detach_()
+
+                ptr_increase = feats.shape[0]
+                P['queue_ptr'] = ptr_increase if P['queue_ptr'] + ptr_increase >= 2048 else P['queue_ptr'] + ptr_increase
+                P['queue_feats'][P['queue_ptr'] - ptr_increase: P['queue_ptr']] = feats
+                P['queue_labels'][P['queue_ptr'] - ptr_increase: P['queue_ptr']] = labels
+                L_lac = criterion(P['queue_feats'], P['queue_labels'])
+
                 batch = loss_smile(batch, P, Z)
+                batch['loss_tensor'] += P['lambda_lac'] * L_lac
                 batch['loss_tensor'].backward()
             else:
                 batch = loss_warm(batch, P, Z)
@@ -127,6 +160,10 @@ def train(model, P, Z):
 
     # best_weights_f = copy.deepcopy(model.feature_extractor.state_dict())
     logger = train_logger(P)  # initialize logger
+    # memory queue
+    P['queue_feats'] = torch.zeros(2048, 2, P['z_dim']).cuda()
+    P['queue_labels'] = torch.zeros(2048).cuda()
+    P['queue_ptr'] = 0
 
     for epoch in range(P['num_epochs']):
         gb_logger.info('Epoch {}/{}'.format(epoch, P['num_epochs'] - 1))
@@ -353,37 +390,44 @@ if __name__ == '__main__':
         P['bsize'] = 8
         P['lr'] = 1e-5
         P['wd'] = 1e-2
-        P['beta'] = 1e-4
-        P['theta'] = 0.8
-        P['z_dim'] = 512
-        P['warmup_epoch'] = 2
+        P['alpha'] = 0.1
+        P['beta'] = 0.01
+        P['theta'] = 0.01
+        P['z_dim'] = 128
+        P['warmup_epoch'] = 1
     elif P['dataset'] == 'cub':
         P['bsize'] = 8
         P['lr'] = 1e-5
         P['wd'] = 1e-5
-        P['warmup_epoch'] = 15
-        P['beta'] = 1e-4
-        P['theta'] = 0.8
-        P['z_dim'] = 512
+        P['alpha'] = 0.1
+        P['beta'] = 0.01
+        P['theta'] = 0.01
+        P['z_dim'] = 128
+        P['warmup_epoch'] = 1
     elif P['dataset'] == 'nuswide':
         P['bsize'] = 16
         P['lr'] = 1e-5
         P['wd'] = 1e-4
-        P['beta'] = 1e-4
-        P['theta'] = 0.8
-        P['z_dim'] = 512
+        P['alpha'] = 0.1
+        P['beta'] = 0.01
+        P['theta'] = 0.01
+        P['z_dim'] = 128
+        P['warmup_epoch'] = 1
     elif P['dataset'] == 'coco':
         P['bsize'] = 16
         P['lr'] = 1e-5
         P['wd'] = 1e-4
-        P['beta'] = 1e-5
-        P['theta'] = 0.8
-        P['z_dim'] = 512
+        P['alpha'] = 0.1
+        P['beta'] = 0.01
+        P['theta'] = 0.01
+        P['z_dim'] = 128
+        P['warmup_epoch'] = 1
     # P['lr'] = args.lr
     # P['wd'] = args.wd
     P['alpha'] = args.alpha
     P['beta'] = args.beta
     P['theta'] = args.theta
+    P['lambda_lac'] = args.lambda_lac
     P['z_dim'] = args.z_dim
     # P['bsize'] = args.bs
     P['T'] = args.T
@@ -394,7 +438,7 @@ if __name__ == '__main__':
     else:
         P['train_set_variant'] = 'observed'
 
-    P['num_epochs'] = 10
+    P['num_epochs'] = 20
     P['freeze_feature_extractor'] = False
     P['use_feats'] = False
     P['arch'] = 'resnet50'
