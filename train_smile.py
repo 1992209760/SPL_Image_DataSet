@@ -38,7 +38,7 @@ args = parser.parse_args()
 
 # global logger
 sys.stdout = open(os.devnull, 'w')
-gb_logger, save_dir = initLogger(args, save_dir='param_smile_adam_LEM/')
+gb_logger, save_dir = initLogger(args, save_dir='smile_results/')
 
 
 def run_train_phase(model, P, Z, logger, epoch, phase):
@@ -385,6 +385,7 @@ if __name__ == '__main__':
     # Optimization parameters:
     P['sample_times'] = 5
     P['warmup_epoch'] = 5
+    P['num_epochs'] = 10
     # P['z_dim'] = 256
     if P['dataset'] == 'pascal':
         P['bsize'] = 8
@@ -394,6 +395,7 @@ if __name__ == '__main__':
         P['beta'] = 0.01
         P['theta'] = 0.01
         P['z_dim'] = 128
+        P['lambda_lac'] = 0.1
         P['warmup_epoch'] = 1
     elif P['dataset'] == 'cub':
         P['bsize'] = 8
@@ -403,7 +405,9 @@ if __name__ == '__main__':
         P['beta'] = 0.01
         P['theta'] = 0.01
         P['z_dim'] = 128
+        P['lambda_lac'] = 0.001
         P['warmup_epoch'] = 1
+        P['num_epochs'] = 20
     elif P['dataset'] == 'nuswide':
         P['bsize'] = 16
         P['lr'] = 1e-5
@@ -412,6 +416,7 @@ if __name__ == '__main__':
         P['beta'] = 0.01
         P['theta'] = 0.01
         P['z_dim'] = 128
+        P['lambda_lac'] = 0.1
         P['warmup_epoch'] = 1
     elif P['dataset'] == 'coco':
         P['bsize'] = 16
@@ -420,15 +425,16 @@ if __name__ == '__main__':
         P['alpha'] = 0.1
         P['beta'] = 0.01
         P['theta'] = 0.01
-        P['z_dim'] = 128
+        P['z_dim'] = 64
+        P['lambda_lac'] = 0.01
         P['warmup_epoch'] = 1
     # P['lr'] = args.lr
     # P['wd'] = args.wd
-    P['alpha'] = args.alpha
-    P['beta'] = args.beta
-    P['theta'] = args.theta
-    P['lambda_lac'] = args.lambda_lac
-    P['z_dim'] = args.z_dim
+    # P['alpha'] = args.alpha
+    # P['beta'] = args.beta
+    # P['theta'] = args.theta
+    # P['lambda_lac'] = args.lambda_lac
+    # P['z_dim'] = args.z_dim
     # P['bsize'] = args.bs
     P['T'] = args.T
 
@@ -438,7 +444,6 @@ if __name__ == '__main__':
     else:
         P['train_set_variant'] = 'observed'
 
-    P['num_epochs'] = 20
     P['freeze_feature_extractor'] = False
     P['use_feats'] = False
     P['arch'] = 'resnet50'

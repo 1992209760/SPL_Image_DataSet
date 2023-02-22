@@ -245,7 +245,7 @@ class LEModel_smile(nn.Module):
         # beta = distribution_statics[:, self.num_classes:]
         alpha = self.d_encoder_alpha(features)
         beta = self.d_encoder_beta(features)
-        alpha, beta = F.softplus(alpha), F.softplus(beta)
+        alpha, beta = F.softplus(alpha) + 1e-6, F.softplus(beta) + 1e-6
         # alpha, beta = F.relu(alpha) + 1e-6, F.relu(beta) + 1e-6
         beta_sample_machine = torch.distributions.beta.Beta(alpha, beta)
         d = beta_sample_machine.rsample()
